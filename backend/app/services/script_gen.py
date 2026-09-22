@@ -80,12 +80,24 @@ def _llm_pages(topic: str, slides: List[Dict], tone: str) -> List[str] | None:
 
 _TRANSITIONS = ["", "首先，", "接下来，", "然后，", "再来看", "另一方面，", "此外，", "最后来看"]
 
+# 口播垃圾行：网页导航/协议文字等不适合念出来的内容
+_SPOKEN_JUNK = (
+    "用户协议", "隐私政策", "登录政策", "立即注册", "忘记密码", "扫码",
+    "版权所有", "ICP", "收藏本站", "设为首页", "下载客户端", "关注我们",
+    "联系客服", "意见反馈", "退出登录", "汇报人：",
+)
+
+
+def _is_junk_spoken(s: str) -> bool:
+    return any(w in s for w in _SPOKEN_JUNK)
+
 
 def _clean_spoken(b: str) -> str:
-    """清理不适合口播的符号：抓取资料的【标题】包装、日期前缀、markdown 残留。"""
+    """清理不适合口播的符号：抓取资料的【标题】包装、日期/相对时间前缀、markdown 残留。"""
     b = re.sub(r"^[\s\-•·\d.、]+", "", str(b)).strip()
     b = re.sub(r"^【([^】]{0,40})】\s*", "", b)          # 去掉开头【...】
     b = re.sub(r"\d{4}[-年/]\d{1,2}[-月/]\d{1,2}日?\s*[·•]?\s*", "", b)  # 去日期前缀
+    b = re.sub(r"\d+\s*(天|小时|分钟|周|个月|月|年)前\s*[·•]?\s*", "", b)  # 去相对时间
     b = re.sub(r"^[\s·•]+", "", b)
     return b.strip()
 
@@ -108,6 +120,7 @@ def _template_pages(topic: str, slides: List[Dict], tone: str) -> List[str]:
     for i, s in enumerate(slides):
         title = (s.get("title", "") or "").strip()
         bullets = [b for b in (s.get("bullets", []) or []) if str(b).strip()]
+        bullets = [b for b in bullets if not _is_junk_spoken(str(b))]
 
         if i == 0:
             # 封面：问候 + 主题 + 预告章节（不念副标题/汇报人）

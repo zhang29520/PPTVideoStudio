@@ -53,6 +53,21 @@ export const api = {
   },
   pptDownloadUrl: async (id) => `${await getBase()}/api/ppt/${id}/download`,
   thumbUrl: async (id, index) => `${await getBase()}/api/ppt/${id}/thumb/${index}.png`,
+  pageUrl: async (id, index) => `${await getBase()}/api/ppt/${id}/page/${index}.png`,
+  // 应用内下载（不弹新窗口）：fetch → blob → a[download]
+  downloadFile: async (url, filename) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`下载失败 (${res.status})`);
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename || "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 30000);
+  },
 
   // 解说词
   generateSpeech: (id, tone) =>

@@ -140,3 +140,19 @@ def slide_thumb(project_id: str, index: int):
         img.thumbnail((THUMB_W, THUMB_H))
         img.save(thumb)
     return FileResponse(thumb, media_type="image/png")
+
+
+@router.get("/api/ppt/{project_id}/page/{index}.png")
+def slide_page_full(project_id: str, index: int):
+    """全尺寸单页图（点击放大预览用）。"""
+    project = store.load_project(project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    slides = project.get("slides", [])
+    if index < 0 or index >= len(slides):
+        raise HTTPException(404, "页码不存在")
+
+    h = _slides_hash(slides) + "_" + (project.get("theme", {}).get("primary", "def")).lstrip("#")
+    d = Path(store.project_dir(project_id))
+    pngs = render_slides(slides, d / "thumbs_render" / h, theme=project.get("theme"))
+    return FileResponse(pngs[index], media_type="image/png")

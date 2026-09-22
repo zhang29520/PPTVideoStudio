@@ -125,25 +125,86 @@ function Seg({ options, value, onChange, style = {} }) {
 /* ---------- 缩略图 ---------- */
 function Thumb({ projectId, index, tick, onZoom, big, w = 150 }) {
   const [url, setUrl] = useState("");
+  const [tried, setTried] = useState(0);
   useEffect(() => {
     let alive = true;
     if (!projectId) return;
+    setUrl("");
     api.thumbUrl(projectId, index).then((u) => alive && setUrl(`${u}?t=${tick}`)).catch(() => {});
     return () => { alive = false; };
   }, [projectId, index, tick]);
+  // 图片还没渲染出来时每 2.5s 自动重试，直到加载成功
+  function onErr() {
+    if (tried > 40) return;
+    setTimeout(() => {
+      api.thumbUrl(projectId, index).then((u) => setUrl(`${u}?t=${Date.now()}`)).catch(() => {});
+      setTried((n) => n + 1);
+    }, 2500);
+  }
   return (
     <div
       onClick={big ? undefined : onZoom}
       style={{
         width: w, height: (w * 9) / 16, flexShrink: 0, borderRadius: 8, overflow: "hidden",
         background: "#F1EDE8", border: `1px solid ${LINE}`, cursor: big ? "default" : "zoom-in",
-        display: "flex", alignItems: "center", justifyContent: "center",
+        display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
       }}
     >
       {url ? (
-        <img src={url} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={`第${index + 1}页`} />
+        <img src={url} onError={onErr} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={`第${index + 1}页`} />
       ) : (
-        <span style={{ color: MUTED, fontSize: 12 }}>渲染中…</span>
+        <span style={{ color: "#A89F93", fontSize: 11, textAlign: "center", lineHeight: 1.5, padding: 4 }}>
+          渲染中<br />首次约需 10 秒
+        </span>
+      )}
+    </div>
+  );
+}
+
+/* 点击放大：全屏预览某一页 */
+function ZoomModal({ projectId, index, total, onClose, onNav }) {
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowRight" && index < total - 1) onNav(index + 1);
+      if (e.key === "ArrowLeft" && index > 0) onNav(index - 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [index, total]);
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    setUrl("");
+    api.pageUrl(projectId, index).then((u) => setUrl(`${u}?t=${Date.now()}`)).catch(() => {});
+  }, [projectId, index]);
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,16,12,.72)",
+      display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 14,
+    }}>
+      <div style={{ color: "#EDE7DF", fontSize: 13 }}>第 {index + 1} / {total} 页 · 点击任意处或按 Esc 关闭 · ←→ 切页</div>
+      <div style={{
+        background: "#fff", borderRadius: 14, padding: 10, maxWidth: "82vw", boxShadow: "0 24px 80px rgba(0,0,0,.4)",
+      }}>
+        {url ? (
+          <img src={url} style={{ maxWidth: "80vw", maxHeight: "76vh", display: "block", borderRadius: 8 }} alt={`第${index + 1}页`} />
+        ) : (
+          <div style={{ width: 640, height: 360, display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontSize: 14 }}>
+            加载中…
+          </div>
+        )}
+      </div>
+      {index > 0 && (
+        <div onClick={(e) => { e.stopPropagation(); onNav(index - 1); }} style={{
+          position: "absolute", left: 26, top: "50%", transform: "translateY(-50%)", cursor: "pointer",
+          color: "#fff", fontSize: 40, userSelect: "none", opacity: 0.75, padding: "10px 18px",
+        }}>‹</div>
+      )}
+      {index < total - 1 && (
+        <div onClick={(e) => { e.stopPropagation(); onNav(index + 1); }} style={{
+          position: "absolute", right: 26, top: "50%", transform: "translateY(-50%)", cursor: "pointer",
+          color: "#fff", fontSize: 40, userSelect: "none", opacity: 0.75, padding: "10px 18px",
+        }}>›</div>
       )}
     </div>
   );
@@ -187,9 +248,16 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   const [progress, setProgress] = useState(null);
   const [slides, setSlides] = useState([]);
   const [thumbTick, setThumbTick] = useState(0);
+  const [zoomIdx, setZoomIdx] = useState(-1);
+  const [noLLM, setNoLLM] = useState(false);
 
   const refresh = useCallback(() => api.listProjects().then(setProjects).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh, project?.id]);
+
+  // 未配置 AI 时提示（配置后内容质量大幅提升）
+  useEffect(() => {
+    api.getSettings().then((s) => setNoLLM(!(s.ppt_llm_api_base && s.ppt_llm_model))).catch(() => {});
+  }, []);
 
   // 打开已有项目时直接进入预览
   useEffect(() => {
@@ -257,11 +325,17 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
 
   const stepDots = (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: 12, color: MUTED }}>
-      <b style={{ color: step === 1 ? ORANGE : INK }}>① {project?.topic || "输入主题"}</b>
+      <b onClick={() => { if (!busy) { setProject(null); setSlides([]); setStep(1); } }} style={{
+        color: step === 1 ? ORANGE : INK, cursor: "pointer",
+      }}>① {project?.topic || "输入主题"}</b>
       <span style={{ color: "#D5CFC8" }}>→</span>
-      <b style={{ color: step === 2 ? ORANGE : step > 2 ? INK : "#C5BFB7" }}>② 选择版式</b>
+      <b onClick={() => { if (!busy && topic) setStep(2); }} style={{
+        color: step === 2 ? ORANGE : step > 2 ? INK : "#C5BFB7", cursor: "pointer",
+      }}>② 选择版式</b>
       <span style={{ color: "#D5CFC8" }}>→</span>
-      <b style={{ color: step === 3 ? ORANGE : "#C5BFB7" }}>③ 预览保存</b>
+      <b onClick={() => { if (!busy && slides.length) setStep(3); }} style={{
+        color: step === 3 ? ORANGE : "#C5BFB7", cursor: "pointer",
+      }}>③ 预览保存</b>
     </div>
   );
 
@@ -354,6 +428,14 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
             <Btn onClick={startGenerate} disabled={busy}>{busy ? "生成中…" : "开始生成"}</Btn>
             <span style={{ fontSize: 12, color: MUTED }}>分析主题 → 抓取网络资料 → 大纲 → 逐页内容</span>
           </div>
+          {noLLM && (
+            <div style={{
+              marginTop: 14, padding: "10px 14px", borderRadius: 10, fontSize: 12.5, lineHeight: 1.7,
+              background: "#FFF7E8", border: "1px solid #F2DDB4", color: "#8A6116",
+            }}>
+              💡 未配置 AI：当前使用免费内置引擎，内容为基础水平。在「高级设置 → ② 解说词 AI」里填入任意大模型 API（DeepSeek / 智谱 GLM / Kimi 等，注册即送额度），内容质量会大幅提升。
+            </div>
+          )}
           <Progress progress={progress} />
           <Msg text={msg} error={err} />
         </div>
@@ -364,17 +446,28 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
           <div style={cardStyle}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
               <h3 style={{ margin: 0, fontSize: 15 }}>预览（{slides.length} 页）</h3>
+              <span style={{ fontSize: 12, color: MUTED }}>点击任意一页可放大预览</span>
               <span style={{ flex: 1 }} />
+              <Btn kind="ghost" onClick={() => { setProject(null); setSlides([]); setTopic(""); setStep(1); }}>＋ 新建 PPT</Btn>
               <Btn kind="ghost" icon="save" onClick={savePpt} disabled={busy || !slides.length}>保存 PPT</Btn>
               <Btn icon="arrowR" onClick={() => goPanel("script")} disabled={!slides.length}>生成解说词，进入下一步 →</Btn>
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {slides.map((_, i) => (
-                <Thumb key={i} projectId={project?.id} index={i} tick={thumbTick} w={132} onZoom={() => {}} />
+                <Thumb key={i} projectId={project?.id} index={i} tick={thumbTick} w={132} onZoom={() => setZoomIdx(i)} />
               ))}
             </div>
             <Msg text={msg} error={err} />
           </div>
+          {zoomIdx >= 0 && (
+            <ZoomModal
+              projectId={project?.id}
+              index={zoomIdx}
+              total={slides.length}
+              onClose={() => setZoomIdx(-1)}
+              onNav={(i) => setZoomIdx(i)}
+            />
+          )}
         </>
       )}
     </>
@@ -392,6 +485,7 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
   const [err, setErr] = useState(false);
   const [progress, setProgress] = useState(null);
   const [thumbTick, setThumbTick] = useState(0);
+  const [zoomIdx, setZoomIdx] = useState(-1);
 
   useEffect(() => {
     if (!project?.id) return;
@@ -439,6 +533,7 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
         基于每页实际内容撰写 · 可逐页修改 · 保存后写入 PPT 演讲者备注
       </p>
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <Btn kind="ghost" icon="arrowL" onClick={() => goPanel("home")}>← 返回首页</Btn>
         <Btn kind="soft" icon="refresh" onClick={genScript} disabled={busy || !slides.length}>AI 重新生成全部</Btn>
         <Btn kind="ghost" icon="save" onClick={saveScript} disabled={busy || !script.length}>保存解说词</Btn>
         <span style={{ flex: 1 }} />
@@ -449,7 +544,7 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
         {slides.map((s, i) => (
           <div key={i} style={{ display: "flex", gap: 14, padding: "14px 0", borderBottom: i < slides.length - 1 ? `1px solid ${LINE}` : "none" }}>
             <div style={{ width: 132, flexShrink: 0 }}>
-              <Thumb projectId={project?.id} index={i} tick={thumbTick} w={132} onZoom={() => {}} />
+              <Thumb projectId={project?.id} index={i} tick={thumbTick} w={132} onZoom={() => setZoomIdx(i)} />
               <div style={{ color: MUTED, fontSize: 12, marginTop: 6, textAlign: "center" }}>
                 第 {i + 1} 页 · {s.title || ""}
               </div>
@@ -471,6 +566,15 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
         <Btn icon="arrowR" onClick={() => goPanel("audio")}>下一步：AI 配音 →</Btn>
       </div>
       <Msg text={msg} error={err} />
+      {zoomIdx >= 0 && (
+        <ZoomModal
+          projectId={project?.id}
+          index={zoomIdx}
+          total={slides.length}
+          onClose={() => setZoomIdx(-1)}
+          onNav={(i) => setZoomIdx(i)}
+        />
+      )}
     </>
   );
 }
@@ -494,8 +598,7 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState(false);
   const [progress, setProgress] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState("");
-  const previewRef = useRef(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const clampSpeed = (v) => {
     const n = Number(v);
@@ -521,11 +624,18 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
   }
 
   async function preview() {
+    setPreviewing(true);
     try {
       const u = `${await api.previewUrl(voice, clampSpeed(speed))}?t=${Date.now()}`;
-      setPreviewUrl(u);
-      setTimeout(() => previewRef.current?.play().catch(() => {}), 120);
-    } catch { setMsg("试听失败，请检查网络"); setErr(true); }
+      const a = new Audio(u);
+      a.onended = () => setPreviewing(false);
+      a.onerror = () => { setPreviewing(false); setMsg("试听失败：音频加载出错，请检查网络"); setErr(true); };
+      await a.play();
+    } catch (e) {
+      setPreviewing(false);
+      setMsg("试听失败：" + (e.message || "请检查网络"));
+      setErr(true);
+    }
   }
 
   async function generate() {
@@ -576,8 +686,7 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
           <span style={{ fontSize: 12, color: MUTED }}>0.1 步进 · 1=正常 · 最慢 0.1 · 最快 2.0</span>
         </div>
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          <Btn kind="soft" onClick={preview}>🔊 试听</Btn>
-          {previewUrl && <audio ref={previewRef} src={previewUrl} style={{ display: "none" }} />}
+          <Btn kind="soft" onClick={preview} disabled={previewing}>{previewing ? "合成试听中…" : "🔊 试听"}</Btn>
           <Btn onClick={generate} disabled={busy}>{busy ? "合成中…" : "生成配音"}</Btn>
         </div>
         <Progress progress={progress} />
@@ -686,7 +795,8 @@ function VideoPanel({ project }) {
         <div style={cardStyle}>
           <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>导出结果{engine ? ` · ${engine}` : ""}</h3>
           <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-            <Btn onClick={() => window.open(videoUrl)}>下载 MP4</Btn>
+            <Btn onClick={() => api.downloadFile(videoUrl, "PPTVideoStudio.mp4")}>下载 MP4</Btn>
+            <span style={{ fontSize: 12, color: MUTED }}>点击后浏览器默认下载，请留意系统下载提示</span>
           </div>
         </div>
       )}

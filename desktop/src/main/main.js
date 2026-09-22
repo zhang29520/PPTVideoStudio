@@ -159,6 +159,11 @@ function createWindow() {
     if (details && details.reason === "clean-exit") return;
     win.webContents.reload();
   });
+  // 一切新窗口请求一律拦截：外链交给系统浏览器，杜绝应用内弹空白窗
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
   Menu.setApplicationMenu(null);
 }
 

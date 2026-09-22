@@ -99,9 +99,16 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
                     "工具与资源", "风险与合规", "实施步骤建议"]
     angle_pool = (angle_titles * ((middle // len(angle_titles)) + 1))[:middle]
 
-    # 把资料均摊到各内容页：每页尽量 2 条资料 + 1 条主题衔接句
+    # 把资料均摊到各内容页：每页尽量 2 条资料；资料不足时用自然衔接句
     per_page = max(1, (len(facts) + middle - 1) // max(1, middle)) if facts else 0
     fi = 0
+    fillers = [
+        "这一部分我们将结合具体场景展开说明",
+        "下面通过实际案例进一步讲解",
+        "这里重点关注方法与落地路径",
+        "这部分内容与整体目标密切相关",
+        "接下来看实践中的具体做法",
+    ]
     for i, title in enumerate(angle_pool):
         bullets: List[str] = []
         for _ in range(per_page):
@@ -109,9 +116,9 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
                 bullets.append(facts[fi])
                 fi += 1
         if not bullets:
-            bullets = [f"{topic}：{title}的核心内容与要点", "结合实际场景的具体做法与注意事项"]
-        elif len(bullets) == 1:
-            bullets.append(f"{title}对整体目标的意义与影响")
+            bullets = [f"围绕「{title}」，{topic}的核心做法与要点"]
+        if len(bullets) == 1:
+            bullets.append(fillers[i % len(fillers)])
         slides.append({"title": title, "bullets": bullets[:4]})
 
     closing = [f"回顾「{topic}」的核心要点"]
