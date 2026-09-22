@@ -5,6 +5,9 @@ const net = require("net");
 const { spawn } = require("child_process");
 
 const isDev = !app.isPackaged;
+// 公开发布仓库（更新检查）与网盘兜底
+const RELEASE_REPO = "zhang29520/PPTVideoStudio-release";
+const QUARK_URL = "https://pan.quark.cn/s/465afff8905a";
 let win = null;
 let backendProc = null;
 let backendState = {
@@ -148,10 +151,51 @@ ipcMain.handle("app:backendInfo", () => ({ ...backendState }));
 ipcMain.handle("app:openLogs", () => { shell.openPath(logDir()); });
 ipcMain.handle("app:restartBackend", () => startBackend());
 
-app.whenReady().then(() => {
+/* ---------- 更新检查 ---------- */
+function verNum(v) {
+  const parts = String(v || "0").replace(/^v/, "").split(/[.\-]/).map((x) => parseInt(x, 10) || 0);
+  while (parts.length < 3) parts.push(0);
+  return parts;
+}
+function isNewer(latest, current) {
+  const a = verNum(latest), b = verNum(current);
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return false;
+}
+
+async function checkUpdate() {
+  const current = app.getVersion();
+  try {
+    const res = await fetch(`https://api.github.com/repos/${RELEASE_REPO}/releases/latest`, {
+      signal: AbortSignal.timeout(8000),
+      headers: { "User-Agent": "PPTVideoStudio" },
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const latest = String(data.tag_name || "").replace(/^v/, "");
+    if (latest && isNewer(latest, current)) {
+      return { available: true, current, latest, url: data.html_url || `https://github.com/${RELEASE_REPO}/releases/latest`, quark: QUARK_URL, source: "github" };
+    }
+    return { available: false, current, latest: latest || current, quark: QUARK_URL, source: "github" };
+  } catch (e) {
+    // GitHub 连不上：不弹窗打扰，仅提供网盘入口
+    return { available: false, current, latest: "", quark: QUARK_URL, source: "none", githubError: String(e.message || e) };
+  }
+}
+
+ipcMain.handle("app:checkUpdate", () => checkUpdate());
+ipcMain.handle("app:openExternal", (_e, url) => {
+  if (/^https:\/\//.test(url)) shell.openExternal(url);
+});
+let updateCache = null;
+app.whenReady().then(async () => {
   createWindow();
   startBackend();
+  updateCache = await checkUpdate();
 });
+ipcMain.handle("app:updateInfo", () => updateCache || checkUpdate());
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

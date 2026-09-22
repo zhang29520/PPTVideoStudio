@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.3.0";
 const ORANGE = "#FF6B35";
 const ORANGE_SOFT = "#FFF3EC";
 const INK = "#26221E";
@@ -568,6 +568,39 @@ function BackendGate({ info, children }) {
   );
 }
 
+/* ---------- 更新检查 ---------- */
+function UpdateDialog({ info, onClose }) {
+  if (!info) return null;
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(30,25,20,.35)", zIndex: 100,
+      display: "flex", alignItems: "center", justifyContent: "center",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: "#fff", borderRadius: 16, padding: 26, width: 420, boxShadow: "0 12px 40px rgba(0,0,0,.15)",
+      }}>
+        <h3 style={{ margin: "0 0 6px", fontSize: 17, color: INK }}>
+          {info.available ? `发现新版本 v${info.latest}` : "检查更新"}
+        </h3>
+        <p style={{ color: MUTED, fontSize: 13, margin: "0 0 16px", lineHeight: 1.7 }}>
+          当前版本 v{info.current}
+          {info.available ? `，最新版本 v${info.latest}。推荐优先从 GitHub 下载；如果 GitHub 打不开或下载太慢，请用夸克网盘（两个渠道安装包一致）。` : info.source === "none" ? "，暂时连不上 GitHub 更新服务，可从夸克网盘手动获取最新版本。" : "，已是最新版本。"}
+        </p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {info.available && info.url && (
+            <Btn onClick={() => window.pvs.openExternal(info.url)}>GitHub 下载</Btn>
+          )}
+          <Btn kind={info.available ? "ghost" : "primary"} onClick={() => window.pvs.openExternal(info.quark)}>
+            夸克网盘下载
+          </Btn>
+          {info.available && <Btn kind="ghost" onClick={onClose}>暂不更新</Btn>}
+          {!info.available && <Btn kind="ghost" onClick={onClose}>关闭</Btn>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- App ---------- */
 export default function App() {
   const { info, refresh: refreshBackend } = useBackend();
@@ -575,6 +608,20 @@ export default function App() {
   const [scriptReady, setScriptReady] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
   const mainRef = useRef(null);
+  const [update, setUpdate] = useState(null);        // 对话框内容
+  const [newVersion, setNewVersion] = useState(null); // 顶栏横幅
+
+  useEffect(() => {
+    window.pvs.updateInfo().then((u) => { if (u.available) setNewVersion(u); }).catch(() => {});
+  }, []);
+
+  async function manualCheck() {
+    try {
+      const u = await window.pvs.checkUpdate();
+      setUpdate(u);
+      if (u.available) setNewVersion(u);
+    } catch { setUpdate({ available: false, current: APP_VERSION, source: "none", quark: "" }); }
+  }
 
   const goEdit = () => mainRef.current?.scrollTo({ top: 99999, behavior: "smooth" });
 
@@ -619,6 +666,17 @@ export default function App() {
         </span>
       </header>
 
+      {/* 更新横幅 */}
+      {newVersion && (
+        <div onClick={() => setUpdate(newVersion)} style={{
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+          padding: "8px 20px", background: ORANGE, color: "#fff", fontSize: 13,
+          cursor: "pointer", fontWeight: 600,
+        }}>
+          🎉 发现新版本 v{newVersion.latest}，点击立即更新（GitHub / 夸克网盘）
+        </div>
+      )}
+
       {/* 主体 */}
       <main ref={mainRef} style={{ flex: 1, width: "100%", maxWidth: 880, margin: "0 auto", padding: "26px 24px" }}>
         <BackendGate info={info}>
@@ -652,8 +710,12 @@ export default function App() {
         textAlign: "center", padding: "18px 0 22px", fontSize: 12, color: MUTED,
         borderTop: `1px solid ${LINE}`, background: "#fff",
       }}>
-        © 2026 梦极 · PPTVideoStudio v{APP_VERSION} · 联系开发者微信：<span style={{ color: ORANGE }}>mengji333</span>
+        © 2026 梦极 · PPTVideoStudio v{APP_VERSION} ·{" "}
+        <span onClick={manualCheck} style={{ color: ORANGE, cursor: "pointer" }}>检查更新</span>
+        {" "}· 联系开发者微信：<span style={{ color: ORANGE }}>mengji333</span>
       </footer>
+
+      <UpdateDialog info={update} onClose={() => setUpdate(null)} />
     </div>
   );
 }
