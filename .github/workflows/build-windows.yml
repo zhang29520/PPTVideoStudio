@@ -28,6 +28,10 @@ jobs:
           pyinstaller --onefile --name pvs-backend --paths . run_backend.py `
             --collect-all pptx `
             --collect-all multipart `
+            --collect-all fitz `
+            --hidden-import win32com.client `
+            --hidden-import pythoncom `
+            --hidden-import pywintypes `
             --hidden-import uvicorn.logging `
             --hidden-import uvicorn.loops.auto `
             --hidden-import uvicorn.protocols.http.auto `

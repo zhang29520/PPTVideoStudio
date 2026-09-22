@@ -29,18 +29,20 @@ OUTLINE_PROMPT = """你是一名资深 PPT 策划与撰稿专家。请根据【�
 
 
 def _llm_call(prompt: str, timeout: int = 150) -> str | None:
-    s = load_settings()
-    if not (s.get("llm_api_base") and s.get("llm_model")):
+    from ..config import llm_settings
+
+    cfg = llm_settings("ppt")
+    if not (cfg["api_base"] and cfg["model"]):
         return None
-    base = s["llm_api_base"].rstrip("/")
+    base = cfg["api_base"].rstrip("/")
     payload = {
-        "model": s["llm_model"],
+        "model": cfg["model"],
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.6,
     }
     headers = {"Content-Type": "application/json"}
-    if s.get("llm_api_key"):
-        headers["Authorization"] = f"Bearer {s['llm_api_key']}"
+    if cfg["api_key"]:
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
     try:
         req = urllib.request.Request(
             f"{base}/chat/completions",

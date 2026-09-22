@@ -27,18 +27,20 @@ SCRIPT_PROMPT = """你是一名专业的演讲撰稿人。下面是一份 PPT �
 
 
 def _llm_call(payload_prompt: str, timeout: int = 180) -> str | None:
-    s = load_settings()
-    if not (s.get("llm_api_base") and s.get("llm_model")):
+    from ..config import llm_settings
+
+    cfg = llm_settings("script")
+    if not (cfg["api_base"] and cfg["model"]):
         return None
-    base = s["llm_api_base"].rstrip("/")
+    base = cfg["api_base"].rstrip("/")
     payload = {
-        "model": s["llm_model"],
+        "model": cfg["model"],
         "messages": [{"role": "user", "content": payload_prompt}],
         "temperature": 0.7,
     }
     headers = {"Content-Type": "application/json"}
-    if s.get("llm_api_key"):
-        headers["Authorization"] = f"Bearer {s['llm_api_key']}"
+    if cfg["api_key"]:
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
     try:
         req = urllib.request.Request(
             f"{base}/chat/completions",

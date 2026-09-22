@@ -62,10 +62,15 @@ def compose_video(
     transition: float = 0.5,
     subtitle: bool = True,
     progress=None,
+    pptx_path: str | Path | None = None,
+    follow_transition: bool = False,
 ) -> Dict:
-    """合成最终 MP4。返回 {video_path, srt_path, duration, pages}。
+    """合成最终 MP4。返回 {video_path, srt_path, duration, pages, engine}。
 
-    progress(ratio, message) 用于任务进度上报。
+    - pptx_path 存在时优先用 PowerPoint/WPS/LibreOffice 渲染原始 PPT 页面；
+      失败回退内置文字版式。
+    - follow_transition=True 时按 PPT 自带的切换动效处理转场
+      （硬切→无转场；其他动效→按其时长淡入淡出近似）。
     """
     rep = progress or (lambda r, m: None)
     out = Path(out_dir)
@@ -75,9 +80,21 @@ def compose_video(
 
     width, height = RES_MAP.get(resolution, RES_MAP["1080p"])
 
-    # 1. 渲染页面
-    rep(0.05, "正在渲染页面画面…")
-    pngs = render_slides(slides, tmp / "png")
+    # 1. 渲染页面：优先原始 PPT 画面
+    pngs = None
+    transitions: List[Dict] | None = None
+    engine = "内置版式"
+    if pptx_path:
+        rep(0.03, "正在调用 PPT 引擎导出原始页面…")
+        from .pptx_render import render_pptx_real
+
+        real = render_pptx_real(pptx_path, tmp / "real")
+        if real:
+            pngs, transitions, engine = real[0], real[1], real[2]
+            rep(0.08, f"已获取原始画面（{engine}，{len(pngs)} 页）")
+    if pngs is None:
+        rep(0.06, "正在渲染页面画面…")
+        pngs = render_slides(slides, tmp / "png")
 
     # 2. 字幕
     rep(0.15, "正在生成字幕文件…")
@@ -92,11 +109,19 @@ def compose_video(
         rep(0.15 + 0.65 * i / total, f"正在合成第 {i + 1}/{total} 页画面与配音…")
         dur = max(2.0, durations[i] + 0.6)
         seg = tmp / "seg" / f"seg_{i:03d}.mp4"
-        fade_out_st = max(0.0, dur - td)
+        # 转场时长：跟随 PPT 动效 or 全局
+        eff_td = td
+        if follow_transition and transitions and i < len(transitions):
+            eff = transitions[i].get("effect", "global")
+            if eff == "none":
+                eff_td = 0.0
+            elif eff not in ("global",):
+                eff_td = max(0.0, min(1.5, float(transitions[i].get("duration", td))))
+        fade_out_st = max(0.0, dur - eff_td)
         vf = (
             f"scale={width}:{height},"
-            f"fade=t=in:st=0:d={td},fade=t=out:st={fade_out_st:.2f}:d={td}"
-            if td > 0
+            f"fade=t=in:st=0:d={eff_td},fade=t=out:st={fade_out_st:.2f}:d={eff_td}"
+            if eff_td > 0
             else f"scale={width}:{height}"
         )
         cmd = [
@@ -144,4 +169,4 @@ def compose_video(
         shutil.copy(merged, final)
 
     total = sum(max(2.0, d + 0.6) for d in durations)
-    return {"video_path": str(final), "srt_path": str(srt_path), "duration": total, "pages": len(pngs)}
+    return {"video_path": str(final), "srt_path": str(srt_path), "duration": total, "pages": len(pngs), "engine": engine}

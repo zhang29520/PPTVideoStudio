@@ -5,6 +5,8 @@ const net = require("net");
 const { spawn } = require("child_process");
 
 const isDev = !app.isPackaged;
+// 规避部分环境（虚拟机/老显卡）GPU 崩溃导致的白屏
+app.disableHardwareAcceleration();
 // 公开发布仓库（更新检查）与网盘兜底
 const RELEASE_REPO = "zhang29520/PPTVideoStudio-release";
 const QUARK_URL = "https://pan.quark.cn/s/465afff8905a";
@@ -133,17 +135,30 @@ function createWindow() {
     minHeight: 640,
     title: "PPTVideoStudio",
     backgroundColor: "#fafaf9",
+    show: false, // 等 ready-to-show 再显示，避免白屏/闪白
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
-  if (isDev) {
-    win.loadURL("http://localhost:5173");
-  } else {
-    win.loadFile(path.join(__dirname, "../../dist/index.html"));
-  }
+  const indexUrl = isDev
+    ? "http://localhost:5173"
+    : "file://" + path.join(__dirname, "../../dist/index.html").replace(/\\/g, "/");
+  win.loadURL(indexUrl);
+  win.once("ready-to-show", () => win.show());
+  // 页面加载失败（打包资源路径异常等）→ 自动重载，最多 3 次
+  let reloads = 0;
+  win.webContents.on("did-fail-load", (_e, code, desc, url, isMain) => {
+    if (!isMain || reloads >= 3) return;
+    reloads += 1;
+    setTimeout(() => win.loadURL(indexUrl), 800 * reloads);
+  });
+  // 渲染进程崩溃 → 自动重启渲染进程并重载
+  win.webContents.on("render-process-gone", (_e, details) => {
+    if (details && details.reason === "clean-exit") return;
+    win.webContents.reload();
+  });
   Menu.setApplicationMenu(null);
 }
 

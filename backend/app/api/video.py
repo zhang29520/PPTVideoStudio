@@ -24,6 +24,9 @@ def export_video(project_id: str, payload: dict = None):
         raise HTTPException(400, "请先生成与页面数一致的配音")
 
     payload = payload or {}
+    # 原始 PPT 文件（导入型项目为 upload.pptx；生成型为重建的 output.pptx）
+    pptx_rel = project.get("files", {}).get("pptx")
+    pptx_path = str(Path(store.project_dir(project_id)) / pptx_rel) if pptx_rel else None
     # 补齐解说词长度（导入型项目可能没有 script）
     while len(script) < len(project["slides"]):
         script.append(project["slides"][len(script)].get("title", ""))
@@ -44,11 +47,17 @@ def export_video(project_id: str, payload: dict = None):
             transition=float(payload.get("transition", 0.5)),
             subtitle=bool(payload.get("subtitle", True)),
             progress=progress,
+            pptx_path=pptx_path,
+            follow_transition=bool(payload.get("follow_transition", False)),
         )
         project["files"]["video"] = Path(result["video_path"]).name
         project["files"]["srt"] = Path(result["srt_path"]).name
         store.save_project(project)
-        return {"video": project["files"]["video"], "duration": result["duration"]}
+        return {
+            "video": project["files"]["video"],
+            "duration": result["duration"],
+            "engine": result.get("engine", ""),
+        }
 
     tid = tasks.start(job)
     return {"taskId": tid, "message": "视频合成任务已启动"}
