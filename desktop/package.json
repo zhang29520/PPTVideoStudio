@@ -5,7 +5,7 @@
   "author": "奇葩锅 <mr_xiaoping@163.com>",
   "main": "src/main/main.js",
   "scripts": {
-    "dev": "concurrently -k \"npm run dev:backend\" \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && electron .\"",
     "dev:backend": "cd ../backend && ${PVS_PYTHON:-python3} -m app.main",
     "build": "vite build",
     "start": "electron .",

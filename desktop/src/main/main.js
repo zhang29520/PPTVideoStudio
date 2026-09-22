@@ -82,7 +82,7 @@ async function startBackend(attempt = 1) {
   let cmd, args, opts;
   if (isDev) {
     const backendDir = path.join(__dirname, "../../../backend");
-    const python = process.platform === "win32" ? "python" : "python3";
+    const python = process.env.PVS_PYTHON || (process.platform === "win32" ? "python" : "python3");
     cmd = python;
     args = ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port)];
     opts = { cwd: backendDir, env, stdio: ["ignore", logStream, logStream] };
