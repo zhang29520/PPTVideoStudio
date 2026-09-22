@@ -250,18 +250,20 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   const [thumbTick, setThumbTick] = useState(0);
   const [zoomIdx, setZoomIdx] = useState(-1);
   const [noLLM, setNoLLM] = useState(false);
-  const [aiModel, setAiModel] = useState("");
-  const [engine, setEngine] = useState("ai");
+  const [aiList, setAiList] = useState([]);   // [{id,name,model}]
+  const [engine, setEngine] = useState("builtin");
 
   const refresh = useCallback(() => api.listProjects().then(setProjects).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh, project?.id]);
 
-  // 未配置 AI 时提示（配置后内容质量大幅提升）
+  // 读取已保存的 AI 配置列表，默认选中标记「默认」的那个
   useEffect(() => {
-    api.getSettings().then((s) => {
-      const has = !!(s.ppt_llm_api_base && s.ppt_llm_model);
-      setNoLLM(!has);
-      setAiModel(has ? s.ppt_llm_model : "");
+    api.getSettings().then((st) => {
+      const list = (st.ai_profiles || []).filter((p) => p.base && p.model);
+      setAiList(list);
+      setNoLLM(list.length === 0);
+      const def = list.find((p) => p.id === st.default_profile) || list[0];
+      setEngine(def ? def.id : "builtin");
     }).catch(() => {});
   }, []);
 
@@ -281,7 +283,11 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
         setProject({ id: pid, topic });
       }
       await runTask(
-        () => api.generatePpt(pid, { slides: count, color, style, engine: noLLM ? "builtin" : engine }),
+        () => api.generatePpt(pid, {
+          slides: count, color, style,
+          engine: engine === "builtin" ? "builtin" : "ai",
+          profile_id: engine === "builtin" ? undefined : engine,
+        }),
         (t) => setProgress(t)
       ).then((r) => {
         if (r?.warning) { setMsg("AI 调用失败，已用内置引擎兜底：" + r.warning); setErr(true); }
@@ -434,15 +440,13 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
           <div style={labelStyle}>AI 引擎</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <Seg
-              options={noLLM
-                ? [["builtin", "内置引擎（免费）"]]
-                : [["ai", `AI：${aiModel}`], ["builtin", "内置引擎（免费）"]]}
-              value={noLLM ? "builtin" : engine}
+              options={[...aiList.map((p) => [p.id, `${p.name} · ${p.model}`]), ["builtin", "内置引擎（免费）"]]}
+              value={engine}
               onChange={setEngine}
             />
             {noLLM && (
               <span style={{ fontSize: 12, color: MUTED }}>
-                未配置 AI，在「高级设置」里填入 DeepSeek 等 API 后可选
+                未配置 AI，在「高级设置」里添加后可选
               </span>
             )}
           </div>
@@ -847,8 +851,9 @@ function SettingsPanel() {
   const [s, setS] = useState(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
+  const [editing, setEditing] = useState(null);   // 正在编辑/新增的 profile（null=关闭）
+  const [testingId, setTestingId] = useState(null);
+  const [testResults, setTestResults] = useState({}); // {profileId: {ok, model|error}}
 
   useEffect(() => { api.getSettings().then(setS).catch((e) => setMsg("加载失败：" + e.message)); }, []);
 
@@ -857,15 +862,125 @@ function SettingsPanel() {
     try { await api.saveSettings(s); setMsg("设置已保存 ✔"); setErr(false); }
     catch (e) { setMsg("保存失败：" + e.message); setErr(true); }
   }
-  async function testLlm() {
-    setTesting(true); setTestResult(null);
-    try {
-      await api.saveSettings(s); // 先保存再测，保证测的是当前填写内容
-      const r = await api.testLlm();
-      setTestResult(r);
-    } catch (e) { setTestResult({ ok: false, error: e.message }); }
-    finally { setTesting(false); }
+
+  function saveProfile() {
+    const p = { ...editing };
+    if (!p.name?.trim() || !p.base?.trim() || !p.model?.trim()) {
+      setMsg("名称、API 地址、模型名都要填"); setErr(true); return;
+    }
+    const list = [ ...(s.ai_profiles || []) ];
+    const i = list.findIndex((x) => x.id === p.id);
+    if (i >= 0) list[i] = p; else list.push(p);
+    const next = { ...s, ai_profiles: list };
+    if (!next.default_profile) next.default_profile = p.id;
+    setS(next);
+    setEditing(null);
+    api.saveSettings(next).then(() => setMsg("AI 配置已保存 ✔")).catch((e) => setMsg("保存失败：" + e.message));
   }
+
+  function deleteProfile(id) {
+    const list = (s.ai_profiles || []).filter((x) => x.id !== id);
+    const next = { ...s, ai_profiles: list };
+    if (next.default_profile === id) next.default_profile = list[0]?.id || "";
+    setS(next);
+    api.saveSettings(next).then(() => setMsg("已删除 ✔")).catch((e) => setMsg("删除失败：" + e.message));
+  }
+
+  function setDefault(id) {
+    const next = { ...s, default_profile: id };
+    setS(next);
+    api.saveSettings(next).then(() => setMsg("已设为默认 ✔")).catch((e) => setMsg("设置失败：" + e.message));
+  }
+
+  async function testProfile(id) {
+    setTestingId(id);
+    try {
+      const r = await api.testLlm(id);
+      setTestResults((m) => ({ ...m, [id]: r }));
+    } catch (e) {
+      setTestResults((m) => ({ ...m, [id]: { ok: false, error: e.message } }));
+    } finally { setTestingId(null); }
+  }
+
+  const profiles = s?.ai_profiles || [];
+
+  const profileEditor = editing && (
+    <div style={{ border: `1.5px solid ${ORANGE}`, borderRadius: 12, padding: 14, display: "grid", gap: 10 }}>
+      <select
+        value=""
+        onChange={(e) => {
+          const p = AI_PRESETS[e.target.value];
+          if (p) setEditing({ ...editing, base: p.base, model: p.model, name: editing.name || p.name });
+        }}
+        style={{ ...inputStyle, color: MUTED }}
+      >
+        <option value="">选择服务商，自动填充地址和模型名…</option>
+        {Object.entries(AI_PRESETS).map(([k, p]) => (
+          <option key={k} value={k}>{p.name}（{p.model}）</option>
+        ))}
+      </select>
+      <input value={editing.name || ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+        style={inputStyle} placeholder="配置名称（如：DeepSeek 官方 / 我的 API 中转）" />
+      <input value={editing.base || ""} onChange={(e) => setEditing({ ...editing, base: e.target.value })}
+        style={inputStyle} placeholder="API 地址（https://…/v1）" />
+      <div style={{ display: "flex", gap: 10 }}>
+        <input type="password" value={editing.key || ""} onChange={(e) => setEditing({ ...editing, key: e.target.value })}
+          style={{ ...inputStyle, flex: 1 }} placeholder="API Key（sk-…）" />
+        <input value={editing.model || ""} onChange={(e) => setEditing({ ...editing, model: e.target.value })}
+          style={{ ...inputStyle, width: 180 }} placeholder="模型名" />
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Btn onClick={saveProfile}>保存此配置</Btn>
+        <Btn kind="ghost" onClick={() => setEditing(null)}>取消</Btn>
+      </div>
+    </div>
+  );
+
+  const profileList = (
+    <div style={{ display: "grid", gap: 8 }}>
+      {profiles.length === 0 && (
+        <div style={{ color: MUTED, fontSize: 13 }}>还没有保存的 AI 配置，点下面「＋ 添加 AI」开始。</div>
+      )}
+      {profiles.map((p) => {
+        const isDefault = s?.default_profile === p.id;
+        const tr = testResults[p.id];
+        return (
+          <div key={p.id} style={{
+            display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+            border: `1px solid ${isDefault ? ORANGE : LINE}`, borderRadius: 12,
+            padding: "10px 14px", background: isDefault ? ORANGE_SOFT : "#fff",
+          }}>
+            {isDefault && (
+              <span style={{ fontSize: 11, color: "#fff", background: ORANGE, borderRadius: 99, padding: "2px 10px", fontWeight: 700 }}>
+                默认
+              </span>
+            )}
+            <div style={{ minWidth: 140 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</div>
+              <div style={{ fontSize: 12, color: MUTED }}>{p.model} · {p.base}</div>
+            </div>
+            <span style={{ flex: 1 }} />
+            {!isDefault && <Btn kind="ghost" onClick={() => setDefault(p.id)}>设为默认</Btn>}
+            <Btn kind="ghost" onClick={() => testProfile(p.id)} disabled={testingId === p.id}>
+              {testingId === p.id ? "测试中…" : "测试"}
+            </Btn>
+            <Btn kind="ghost" onClick={() => setEditing({ ...p })}>修改</Btn>
+            <Btn kind="ghost" onClick={() => deleteProfile(p.id)}
+              style={{ color: "#D93025", borderColor: "#F2C7C2" }}>删除</Btn>
+            {tr && tr.ok && <span style={{ fontSize: 12, color: "#1a7f37", width: "100%" }}>✔ 连通正常（{tr.model}）</span>}
+            {tr && !tr.ok && <span style={{ fontSize: 12, color: "#D93025", width: "100%" }}>✘ {tr.error}</span>}
+          </div>
+        );
+      })}
+      {!editing && (
+        <div>
+          <Btn kind="soft" onClick={() => setEditing({ id: `p${Date.now()}`, name: "", base: "", key: "", model: "" })}>
+            ＋ 添加 AI
+          </Btn>
+        </div>
+      )}
+    </div>
+  );
 
   const LLMFields = ({ prefix, disabled }) => (
     <div style={{ opacity: disabled ? 0.45 : 1, display: "grid", gap: 10 }}>
@@ -912,19 +1027,11 @@ function SettingsPanel() {
           ① PPT 生成 AI
           <span style={{ fontSize: 11, color: ORANGE, background: ORANGE_SOFT, padding: "2px 8px", borderRadius: 99, fontWeight: 600 }}>用于：大纲 + 逐页内容</span>
         </h3>
-        <LLMFields prefix="ppt_llm" />
-        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
-          <Btn kind="ghost" onClick={testLlm} disabled={testing}>{testing ? "测试中…" : "测试连通"}</Btn>
-          {testResult && testResult.ok && (
-            <span style={{ fontSize: 13, color: "#1a7f37" }}>✔ 连通正常（模型：{testResult.model}）</span>
-          )}
-          {testResult && !testResult.ok && (
-            <span style={{ fontSize: 13, color: "#D93025", flex: 1, minWidth: 200 }}>✘ {testResult.error}</span>
-          )}
-        </div>
+        {profileList}
+        {profileEditor}
         <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.8, marginTop: 10 }}>
-          生成 PPT 时的资料抓取、大纲与每页要点都走这个模型。留空则使用内置内容引擎。<br />
-          常见模型名：DeepSeek 填 <b>deepseek-chat</b> 或 <b>deepseek-reasoner</b>；智谱 GLM 填 glm-4-air 等；Kimi 填 moonshot-v1-8k。API 地址填到根路径即可（如 https://api.deepseek.com）。
+          可保存多个 AI 配置，标记「默认」的会被首页生成时优先选用（首页也可以临时切换）。<br />
+          常见模型名：DeepSeek 填 <b>deepseek-chat</b> / <b>deepseek-reasoner</b>；智谱 GLM 填 glm-4-air 等；Kimi 填 moonshot-v1-8k。API 地址填到根路径即可（如 https://api.deepseek.com）。
         </div>
       </div>
 

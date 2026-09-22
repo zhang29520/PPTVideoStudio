@@ -134,12 +134,12 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
 
 
 def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,
-                  progress=None) -> tuple[List[Dict] | None, str | None]:
+                  progress=None, profile_id: str | None = None) -> tuple[List[Dict] | None, str | None]:
     """两阶段 LLM 生成：大纲 → 逐页扩写。失败返回 (None, error)。"""
     from ..config import llm_settings
 
     rep = progress or (lambda stage, ratio: None)
-    cfg = llm_settings("ppt")
+    cfg = llm_settings("ppt", profile_id=profile_id)
     if not (cfg["api_base"] and cfg["model"]):
         return None, None  # 未配置不算错误
 
@@ -187,11 +187,12 @@ def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,
 
 def generate_outline(
     topic: str, slides_count: int = 8, audience: str = "通用受众", progress=None,
-    use_llm: bool = True,
+    use_llm: bool = True, profile_id: str | None = None,
 ) -> Dict:
     """progress(stage: str, ratio: float) 用于任务进度上报。
 
     use_llm=False 时跳过 LLM 直接用内置引擎（首页可选择生成引擎）。
+    profile_id 指定使用哪个已保存的 AI 配置（空=默认）。
     返回 {slides, source, knowledge_used, llm_error}：
     llm_error 非 None 表示配置了 LLM 但调用失败（已回退内置引擎）。
     """
@@ -201,7 +202,7 @@ def generate_outline(
     knowledge = knowledge_context(topic)
 
     slides, llm_error = (
-        _llm_generate(topic, slides_count, audience, knowledge, progress)
+        _llm_generate(topic, slides_count, audience, knowledge, progress, profile_id)
         if use_llm else (None, None)
     )
     if slides:

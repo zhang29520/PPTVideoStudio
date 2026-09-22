@@ -7,7 +7,15 @@ router = APIRouter()
 
 @router.get("/api/settings")
 def get_settings():
-    return load_settings()
+    s = load_settings()
+    # 旧版单 AI 配置迁移为列表并落盘，前端列表 UI 直接可用
+    from ..config import _migrate_legacy
+
+    migrated = _migrate_legacy(s)
+    if migrated != s:
+        save_settings(migrated)
+        s = migrated
+    return s
 
 
 @router.put("/api/settings")
@@ -17,12 +25,13 @@ def update_settings(payload: dict):
 
 
 @router.post("/api/settings/test_llm")
-def test_llm():
-    """用当前 PPT 生成 AI 配置发一条测试消息，返回连通结果。"""
+def test_llm(payload: dict = None):
+    """用指定（或默认）AI 配置发一条测试消息，返回连通结果。"""
     import json
     import urllib.request
 
-    cfg = llm_settings("ppt")
+    profile_id = (payload or {}).get("profile_id")
+    cfg = llm_settings("ppt", profile_id=profile_id)
     if not (cfg["api_base"] and cfg["model"]):
         return {"ok": False, "error": "请先填写 API 地址和模型名"}
     base = cfg["api_base"].rstrip("/")
