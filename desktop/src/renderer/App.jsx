@@ -250,13 +250,19 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   const [thumbTick, setThumbTick] = useState(0);
   const [zoomIdx, setZoomIdx] = useState(-1);
   const [noLLM, setNoLLM] = useState(false);
+  const [aiModel, setAiModel] = useState("");
+  const [engine, setEngine] = useState("ai");
 
   const refresh = useCallback(() => api.listProjects().then(setProjects).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh, project?.id]);
 
   // 未配置 AI 时提示（配置后内容质量大幅提升）
   useEffect(() => {
-    api.getSettings().then((s) => setNoLLM(!(s.ppt_llm_api_base && s.ppt_llm_model))).catch(() => {});
+    api.getSettings().then((s) => {
+      const has = !!(s.ppt_llm_api_base && s.ppt_llm_model);
+      setNoLLM(!has);
+      setAiModel(has ? s.ppt_llm_model : "");
+    }).catch(() => {});
   }, []);
 
   // 打开已有项目时直接进入预览
@@ -275,7 +281,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
         setProject({ id: pid, topic });
       }
       await runTask(
-        () => api.generatePpt(pid, { slides: count, color, style }),
+        () => api.generatePpt(pid, { slides: count, color, style, engine: noLLM ? "builtin" : engine }),
         (t) => setProgress(t)
       ).then((r) => {
         if (r?.warning) { setMsg("AI 调用失败，已用内置引擎兜底：" + r.warning); setErr(true); }
@@ -425,6 +431,21 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
                 }}>{s}</div>
             ))}
           </div>
+          <div style={labelStyle}>AI 引擎</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <Seg
+              options={noLLM
+                ? [["builtin", "内置引擎（免费）"]]
+                : [["ai", `AI：${aiModel}`], ["builtin", "内置引擎（免费）"]]}
+              value={noLLM ? "builtin" : engine}
+              onChange={setEngine}
+            />
+            {noLLM && (
+              <span style={{ fontSize: 12, color: MUTED }}>
+                未配置 AI，在「高级设置」里填入 DeepSeek 等 API 后可选
+              </span>
+            )}
+          </div>
           <div style={{ display: "flex", gap: 10, marginTop: 20, alignItems: "center", flexWrap: "wrap" }}>
             <Btn kind="ghost" icon="arrowL" onClick={() => setStep(1)}>上一步</Btn>
             <Btn onClick={startGenerate} disabled={busy}>{busy ? "生成中…" : "开始生成"}</Btn>
@@ -450,6 +471,10 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               <h3 style={{ margin: 0, fontSize: 15 }}>预览（{slides.length} 页）</h3>
               <span style={{ fontSize: 12, color: MUTED }}>点击任意一页可放大预览</span>
               <span style={{ flex: 1 }} />
+              <label style={{ cursor: "pointer" }}>
+                <Btn kind="ghost" icon="upload" disabled={busy}>上传 PPT</Btn>
+                <input type="file" accept=".pptx" onChange={importPpt} style={{ display: "none" }} />
+              </label>
               <Btn kind="ghost" onClick={() => { setProject(null); setSlides([]); setTopic(""); setStep(1); }}>＋ 新建 PPT</Btn>
               <Btn kind="ghost" icon="save" onClick={savePpt} disabled={busy || !slides.length}>保存 PPT</Btn>
               <Btn icon="arrowR" onClick={() => goPanel("script")} disabled={!slides.length}>生成解说词，进入下一步 →</Btn>
@@ -810,6 +835,14 @@ function VideoPanel({ project }) {
 /* ============================================================
    栏目五：高级设置
 ============================================================ */
+const AI_PRESETS = {
+  deepseek: { name: "DeepSeek", base: "https://api.deepseek.com", model: "deepseek-chat" },
+  zhipu: { name: "智谱 GLM", base: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-air" },
+  kimi: { name: "Kimi 月之暗面", base: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
+  qwen: { name: "通义千问", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
+  openai: { name: "OpenAI", base: "https://api.openai.com/v1", model: "gpt-4o-mini" },
+};
+
 function SettingsPanel() {
   const [s, setS] = useState(null);
   const [msg, setMsg] = useState("");
@@ -836,11 +869,28 @@ function SettingsPanel() {
 
   const LLMFields = ({ prefix, disabled }) => (
     <div style={{ opacity: disabled ? 0.45 : 1, display: "grid", gap: 10 }}>
+      <select
+        value=""
+        disabled={disabled}
+        onChange={(e) => {
+          const p = AI_PRESETS[e.target.value];
+          if (p) {
+            upd(`${prefix}_api_base`, p.base);
+            upd(`${prefix}_model`, p.model);
+          }
+        }}
+        style={{ ...inputStyle, color: MUTED }}
+      >
+        <option value="">选择服务商，自动填充地址和模型名…</option>
+        {Object.entries(AI_PRESETS).map(([k, p]) => (
+          <option key={k} value={k}>{p.name}（{p.model}）</option>
+        ))}
+      </select>
       <input value={s?.[`${prefix}_api_base`] || ""} disabled={disabled}
         onChange={(e) => upd(`${prefix}_api_base`, e.target.value)}
         style={inputStyle} placeholder="API 地址（https://…/v1）" />
       <div style={{ display: "flex", gap: 10 }}>
-        <input value={s?.[`${prefix}_api_key`] || ""} disabled={disabled}
+        <input type="password" value={s?.[`${prefix}_api_key`] || ""} disabled={disabled}
           onChange={(e) => upd(`${prefix}_api_key`, e.target.value)}
           style={{ ...inputStyle, flex: 1 }} placeholder="API Key（sk-…）" />
         <input value={s?.[`${prefix}_model`] || ""} disabled={disabled}

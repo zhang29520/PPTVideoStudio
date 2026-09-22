@@ -41,11 +41,13 @@ def generate_ppt(project_id: str, payload: dict = None):
         "style": payload.get("style") or "简约商务",
     }
     project["theme"] = theme
+    use_llm = payload.get("engine", "ai") != "builtin"
 
     def job(progress):
         progress(0.05, "准备生成…")
         outline = generate_outline(
-            project["topic"], slides_count=count, audience=audience, progress=progress
+            project["topic"], slides_count=count, audience=audience, progress=progress,
+            use_llm=use_llm,
         )
         project["slides"] = outline["slides"]
         project["outline_source"] = outline["source"]

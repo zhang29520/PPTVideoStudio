@@ -186,10 +186,12 @@ def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,
 
 
 def generate_outline(
-    topic: str, slides_count: int = 8, audience: str = "通用受众", progress=None
+    topic: str, slides_count: int = 8, audience: str = "通用受众", progress=None,
+    use_llm: bool = True,
 ) -> Dict:
     """progress(stage: str, ratio: float) 用于任务进度上报。
 
+    use_llm=False 时跳过 LLM 直接用内置引擎（首页可选择生成引擎）。
     返回 {slides, source, knowledge_used, llm_error}：
     llm_error 非 None 表示配置了 LLM 但调用失败（已回退内置引擎）。
     """
@@ -198,7 +200,10 @@ def generate_outline(
     rep(0.10, "正在分析主题并抓取相关资料…")
     knowledge = knowledge_context(topic)
 
-    slides, llm_error = _llm_generate(topic, slides_count, audience, knowledge, progress)
+    slides, llm_error = (
+        _llm_generate(topic, slides_count, audience, knowledge, progress)
+        if use_llm else (None, None)
+    )
     if slides:
         rep(0.9, "AI 内容生成完毕")
         return {"slides": slides, "source": "llm", "knowledge_used": bool(knowledge),
