@@ -6,4 +6,7 @@ contextBridge.exposeInMainWorld("pvs", {
   onBackendReady: (cb) => ipcRenderer.on("app:backend-ready", () => cb()),
   openLogs: () => ipcRenderer.invoke("app:openLogs"),
   restartBackend: () => ipcRenderer.invoke("app:restartBackend"),
+  checkUpdate: () => ipcRenderer.invoke("app:checkUpdate"),
+  updateInfo: () => ipcRenderer.invoke("app:updateInfo"),
+  openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
 });
