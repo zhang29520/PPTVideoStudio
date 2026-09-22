@@ -59,7 +59,8 @@ def generate_ppt(project_id: str, payload: dict = None):
         img_count = 0
         if with_images:
             try:
-                img_count = attach_images(project["topic"], project["slides"], progress)
+                img_count = attach_images(project["topic"], project["slides"], progress,
+                                          primary=theme.get("primary") or "#1a3a5c")
             except Exception:
                 img_count = 0  # 配图失败不阻塞生成
         progress(0.95, "正在构建 PPTX 文件…")

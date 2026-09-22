@@ -207,6 +207,89 @@ def _title_relevant(title: str, strong: list, weak: list, relaxed: bool = False)
     return sum(1 for k in weak if k in t) >= (1 if relaxed else 2)
 
 
+# ---------- 本地艺术图生成（配图失败时的兜底，保证页面永不裸奔） ----------
+
+def _art_uri(seed_text: str, primary: str = "#1a3a5c", variant: int = -1) -> str:
+    """按主题色生成抽象装饰图（渐变 + 几何图形），data URI 返回。
+
+    千问/Gamma 页面好看很大程度靠这类抽象图形；搜索失败时用它兜底，
+    网络零依赖。variant 指定风格（-1 = 按 seed 自动轮换）。
+    """
+    import hashlib as _hl
+    import random
+
+    rng = random.Random(_hl.md5(seed_text.encode("utf-8")).hexdigest())
+    if variant < 0:
+        variant = rng.randrange(4)
+
+    W, H = 1280, 900
+    # 主色 → 渐变端色（同色系深浅）
+    h = primary.lstrip("#")
+    if len(h) == 3:
+        h = "".join(x * 2 for x in h)
+    try:
+        pr, pg, pb = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except Exception:
+        pr, pg, pb = 26, 58, 92
+    dark = (max(0, round(pr * 0.28)), max(0, round(pg * 0.30)), max(0, round(pb * 0.34)))
+    lite = (min(255, round(pr + (255 - pr) * 0.55)),
+            min(255, round(pg + (255 - pg) * 0.55)),
+            min(255, round(pb + (255 - pb) * 0.55)))
+
+    img = Image.new("RGB", (W, H))
+    d = ImageDraw.Draw(img, "RGBA")
+    # 纵向/对角渐变
+    for y in range(H):
+        t = y / H
+        c0 = (round(pr + (dark[0] - pr) * t), round(pg + (dark[1] - pg) * t),
+              round(pb + (dark[2] - pb) * t))
+        d.line([(0, y), (W, y)], fill=c0)
+
+    accent = (255, 255, 255)
+    warm = (255, 190, 120)
+
+    if variant == 0:  # 光环 + 散点
+        cx, cy = rng.randint(700, 1000), rng.randint(180, 380)
+        for r, a in ((340, 36), (250, 52), (160, 78)):
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(*accent, a), width=26)
+        for _ in range(46):
+            x, y = rng.randint(40, W - 40), rng.randint(40, H - 40)
+            rr = rng.randint(3, 10)
+            d.ellipse([x - rr, y - rr, x + rr, y + rr], fill=(*accent, rng.randint(28, 90)))
+    elif variant == 1:  # 层叠圆弧（声波感）
+        for i in range(7):
+            r = 160 + i * 105
+            a = 90 - i * 11
+            d.arc([200 - r, 450 - r, 200 + r, 450 + r], -62, 62,
+                  fill=(*lite, max(a, 16)), width=30)
+        d.ellipse([1080 - 60, 200 - 60, 1080 + 60, 200 + 60], fill=(*warm, 200))
+    elif variant == 2:  # 数据条 + 网格
+        for gx in range(0, W, 80):
+            d.line([(gx, 0), (gx, H)], fill=(*accent, 14), width=2)
+        for gy in range(0, H, 80):
+            d.line([(0, gy), (W, gy)], fill=(*accent, 14), width=2)
+        base = rng.randint(380, 520)
+        for i in range(7):
+            bh = rng.randint(70, 330)
+            x0 = 140 + i * 150
+            c = (*lite, 150) if i % 2 else (*accent, 110)
+            d.rounded_rectangle([x0, base + 260 - bh, x0 + 92, base + 260],
+                                radius=14, fill=c)
+    else:  # 山峦层叠
+        for i, (yy, a) in enumerate(((620, 60), (520, 84), (420, 110))):
+            pts = [(0, H)]
+            step = 160
+            for x in range(0, W + step, step):
+                pts.append((x, yy + rng.randint(-90, 90)))
+            pts.append((W, H))
+            d.polygon(pts, fill=(*(lite if i == 2 else accent), a))
+        d.ellipse([W - 330, 90, W - 130, 290], fill=(*warm, 210))
+
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=84)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
 def _slide_query(topic: str, title: str) -> list:
     """构造搜索词阶梯：核心词+页标题 → 核心词 → 主题。"""
     core = _TOPIC_SUFFIX.sub("", topic).strip() or topic
@@ -222,12 +305,14 @@ def _slide_query(topic: str, title: str) -> list:
     return qs
 
 
-def attach_images(topic: str, slides: list, progress=None, per_page_timeout: float = 14.0) -> int:
+def attach_images(topic: str, slides: list, progress=None, per_page_timeout: float = 14.0,
+                  primary: str = "#1a3a5c") -> int:
     """为主题幻灯片逐页配图，写入 slide["image"]=data URI。返回成功页数。
 
     - 封面用主题核心词搜大图（做全幅背景）
     - 内容页用「核心词+页标题」搜索
     - 跨页去重（同一张图不会重复使用）
+    - 搜索失败的页用本地生成的主题色抽象艺术图兜底，页面永不裸奔
     """
     rep = progress or (lambda stage, ratio: None)
     if not slides:
@@ -294,4 +379,12 @@ def attach_images(topic: str, slides: list, progress=None, per_page_timeout: flo
             s["image"] = uri
             ok += 1
             break
+
+    # 最终兜底：本地生成主题色抽象艺术图（零网络依赖，封面必配）
+    for i, s in enumerate(slides):
+        if not isinstance(s, dict) or s.get("image"):
+            continue
+        seed = f"{topic}|{s.get('title', '')}|{i}"
+        s["image"] = _art_uri(seed, primary)
+        ok += 1
     return ok

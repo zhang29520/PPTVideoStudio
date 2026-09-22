@@ -114,6 +114,10 @@ def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = No
             tb = slide.shapes.add_textbox(Emu(822960), Emu(548640), Emu(10515600), Emu(1005840))
             _set_text(tb.text_frame, f"// {title}" if slidev else title, 30,
                       GOLD if slidev else NAVY, bold=True)
+            lead = str(s.get("lead", "")).strip()
+            if lead:
+                lt = slide.shapes.add_textbox(Emu(822960), Emu(1560000), Emu(10515600), Emu(420000))
+                _set_text(lt.text_frame, lead, 13, SLV_TEXT if slidev else RGBColor(0x8A, 0x94, 0xA2))
             line = slide.shapes.add_shape(1, Emu(822960), Emu(1554480), Emu(1828800), Emu(91440))
             line.fill.solid()
             line.fill.fore_color.rgb = GOLD

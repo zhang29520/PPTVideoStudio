@@ -23,7 +23,7 @@ OUTLINE_PROMPT = """你是一名资深 PPT 策划专家。请为主题「{topic}
 
 只输出 JSON 数组：[{{"title": "...", "focus": "..."}}, ...]"""
 
-CONTENT_PROMPT = """你是一名资深行业分析师兼 PPT 撰稿人。请把下面的大纲扩写成 PPT 逐页内容。
+CONTENT_PROMPT = """你是一名资深行业分析师兼 PPT 撰稿人。请把下面的大纲扩写成内容详实的 PPT。
 
 主题：{topic}（受众：{audience}）
 
@@ -35,16 +35,16 @@ CONTENT_PROMPT = """你是一名资深行业分析师兼 PPT 撰稿人。请把�
 
 硬性要求：
 1. 保持大纲的页数与标题不变。
-2. 每个内容页 3~5 条 bullets；每条必须是「关键词：描述」格式——
+2. 每页必须有 lead 字段：一句 25~45 字的导语，概括本页核心观点（放标题下方作副标题）。
+3. 每个内容页 4~5 条 bullets；每条必须是「关键词：描述」格式——
    关键词 2~8 字（如"市场规模""政策红利""落地三步"），冒号用中文"："，
-   描述 15~45 字，必须是实质内容：具体数据、案例名称、方法步骤、对比结论。
-   示例："市场规模：2026 年智慧文旅市场规模预计突破 800 亿元，年增速约 25%"
-3. 含数据的要点务必把数字写进描述（300亿、35%、3倍 等），系统会自动渲染成大数字强调版式。
-4. 优先使用参考资料中的真实信息，资料不足时用专业知识补充，但禁止编造精确数据。
-5. 封面页 bullets 放 1~2 条副标题（无需关键词前缀）；总结页放 3 条核心回顾（带关键词前缀）。
-6. 禁止"要点一""核心内容"这类占位空话。
+   描述 30~60 字，必须包含具体数据、案例、时间、对比或步骤等至少两项实质信息。
+   示例："市场规模：2026 年全国智慧文旅市场规模预计突破 800 亿元，近五年复合增长率达 21.5%，夜游细分赛道增速领先大盘"
+4. 信息密度红线：每页至少出现 2 个具体数字（金额/百分比/年份/数量级），不足就用参考资料补齐或用公认行业常识补充，但禁止编造精确数据。
+5. 封面页 bullets 放 1~2 条副标题；总结页放 3~4 条核心回顾（带关键词前缀）。
+6. 禁止"要点一""核心内容""效果显著"这类空话；每条描述读完必须让人带走一个信息点。
 
-只输出 JSON 数组：[{{"title": "...", "bullets": ["...", ...]}}, ...]"""
+只输出 JSON 数组：[{{"title": "...", "lead": "...", "bullets": ["...", ...]}}, ...]"""
 
 
 def _chat(base: str, key: str, model: str, prompt: str, temperature: float,
@@ -130,7 +130,8 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
             bullets.append(fillers[i % len(fillers)])
         # 结构化为「关键词：描述」，供版式引擎拆分渲染
         bullets = [_structure_line(b, i) for b in bullets[:4]]
-        slides.append({"title": title, "bullets": bullets})
+        slides.append({"title": title, "bullets": bullets,
+                       "lead": f"从「{title}」看{topic.replace('分析报告', '').replace('汇报', '')}的关键事实与行动要点"})
 
     closing = [f"回顾「{topic}」的核心要点"]
     if facts:
@@ -197,7 +198,11 @@ def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,
         title = str(it.get("title", "")).strip()
         bullets = [str(b).strip() for b in it.get("bullets", []) if str(b).strip()]
         if title:
-            slides.append({"title": title, "bullets": bullets})
+            s = {"title": title, "bullets": bullets}
+            lead = str(it.get("lead", "")).strip()
+            if lead:
+                s["lead"] = lead
+            slides.append(s)
     if len(slides) < 2:
         return None, "AI 返回的内容页数不足"
     return slides[:slides_count], None

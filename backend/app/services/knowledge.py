@@ -71,7 +71,8 @@ def _clean_text(s: str) -> str:
     s = re.sub(r"^【([^】]{0,40})】\s*", "", s)
     s = re.sub(r"\d{4}[-年/]\d{1,2}[-月/]\d{1,2}日?\s*[·•]?\s*", "", s)
     s = re.sub(r"\d+\s*(天|小时|分钟|周|个月|月|年)前\s*[·•]?\s*", "", s)
-    s = re.sub(r"^[\s·•\-–—]+", "", s)
+    s = re.sub(r"^\d{1,2}[、.．]\s*", "", s)          # 列表序号 "01 " "3、"
+    s = re.sub(r"^[\s\u201c\u201d\u300c\u300e·•\-–—]+", "", s)  # 开头引号/装饰符
     s = s.strip()
     # 去掉截断省略号，并在最后一个完整句末断句，避免"升级 …"这类半句
     s = re.sub(r"[\s.…]*…\s*$", "", s)
@@ -149,6 +150,11 @@ def search_snippets(topic: str, max_items: int = 8, timeout: int = 5) -> list:
                     return
                 snippet = _clean_text(snippet)
                 if not title or len(snippet) < 20 or _is_junk(title + snippet):
+                    return
+                # 记者引语/访谈片段：成对引号的内容不能当事实
+                if snippet.count("\u201c") >= 2 or snippet.count('"') >= 2:
+                    return
+                if any(w in title + snippet for w in ("记者", "写道", "撰文")):
                     return
                 if not _relevant(title + snippet, kws):
                     return

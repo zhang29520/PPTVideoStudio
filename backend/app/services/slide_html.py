@@ -119,6 +119,7 @@ _STYLE_CSS = {
         .cover .rule{background:{p_light60};}
         .badge{background:{p_light20};color:{p_light60};}
         .ghost{color:rgba(255,255,255,.055);}
+        .lead{color:#A9B6C9;}
         .pk{color:{p_light60};}
         .pc .pk,.stat .k{color:#fff;}
         .pc .pv,.stat .v{color:#A9B6C9;}
@@ -181,6 +182,7 @@ _STYLE_CSS = {
         .img-wrap{border-color:rgba(255,255,255,.14);box-shadow:0 18px 48px rgba(0,0,0,.45);}
         .ghost{color:rgba(255,255,255,.06);
             font-family:'SF Mono',Menlo,Consolas,monospace;}
+        .lead{color:#A9B6C9;}
         .pk{color:{p_light60};}
         .pc .pk,.stat .k{color:#fff;}
         .pc .pv,.stat .v{color:#A9B6C9;}
@@ -240,7 +242,7 @@ def _extract_num(v: str) -> str:
 
 
 def _content_slide(idx: int, total: int, topic: str, title: str, bullets,
-                   last: bool, image: str | None = None) -> str:
+                   last: bool, image: str | None = None, lead: str = "") -> str:
     pts = _points(bullets)
     foot = (f'<div class="foot"><span>{html.escape(topic)}</span>'
             f'<span>{idx + 1} / {total}</span></div>'
@@ -260,7 +262,9 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets,
           </div>
         </div>"""
 
+    lead_html = f'<div class="lead">{html.escape(lead)}</div>' if lead else ""
     head = (f'<div class="slide-title">{html.escape(title)}</div>'
+            f'{lead_html}'
             f'<div class="head-bar"></div>')
     layout = _pick_layout(pts, image)
 
@@ -341,7 +345,8 @@ def build_slides_html(slides: List[Dict], theme: Dict | None) -> str:
             parts.append(_cover_slide(title, [split_point(b) for b in bullets], img))
         else:
             parts.append(
-                _content_slide(i, total, topic, title, bullets, last=(i == total - 1), image=img)
+                _content_slide(i, total, topic, title, bullets, last=(i == total - 1), image=img,
+                               lead=str(s.get("lead", "")).strip())
             )
 
     return f"""<!DOCTYPE html>
@@ -365,8 +370,9 @@ body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};backgro
 .content{{background:#F7F9FC;color:#2B3440;}}
 .content-inner{{padding:96px 130px 120px;display:flex;flex-direction:column;position:relative;z-index:2;height:100%;}}
 .content-inner.single{{justify-content:center;}}
-.slide-title{{font-size:58px;font-weight:800;color:#1E2833;margin-bottom:26px;}}
-.head-bar{{margin-bottom:44px;}}
+.slide-title{{font-size:58px;font-weight:800;color:#1E2833;margin-bottom:14px;}}
+.lead{{font-size:27px;line-height:1.6;color:#6B7686;margin-bottom:26px;max-width:1500px;}}
+.head-bar{{margin-bottom:40px;}}
 .ghost{{position:absolute;top:40px;right:96px;font-size:180px;font-weight:800;line-height:1;
     color:{_alpha(primary, 0.09)};z-index:1;pointer-events:none;}}
 .foot{{position:absolute;bottom:36px;left:130px;right:130px;display:flex;
@@ -383,10 +389,10 @@ body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};backgro
 .pk{{font-weight:800;color:{primary};margin-right:14px;}}
 .pv{{color:inherit;}}
 /* ---------- 版式：2×2 卡片 ---------- */
-.g2{{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-content:start;}}
-.pc{{display:block;padding:38px 42px;}}
-.pc .pk{{display:block;font-size:34px;font-weight:800;color:#1E2833;margin:0 0 14px;}}
-.pc .pv{{display:block;font-size:26px;line-height:1.68;color:#5A6572;}}
+.g2{{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-content:start;}}
+.pc{{display:block;padding:32px 38px;}}
+.pc .pk{{display:block;font-size:34px;font-weight:800;color:#1E2833;margin:0 0 12px;}}
+.pc .pv{{display:block;font-size:27px;line-height:1.62;color:#5A6572;}}
 /* ---------- 版式：数据强调 ---------- */
 .stats{{display:flex;gap:30px;align-content:start;}}
 .stat{{flex:1;display:block;padding:56px 44px;border-radius:20px;}}

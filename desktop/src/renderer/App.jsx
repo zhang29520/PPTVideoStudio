@@ -339,16 +339,18 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
 
   const stepDots = (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: 12, color: MUTED }}>
-      <b onClick={() => { if (!busy) { setProject(null); setSlides([]); setStep(1); } }} style={{
+      <b onClick={() => { if (!busy) { setProject(null); setSlides([]); setStep(1); } }} title="点击返回输入主题" style={{
         color: step === 1 ? ORANGE : INK, cursor: "pointer",
+        textDecoration: step !== 1 ? "underline dotted rgba(0,0,0,.35)" : "none",
       }}>① {project?.topic || "输入主题"}</b>
       <span style={{ color: "#D5CFC8" }}>→</span>
-      <b onClick={() => { if (!busy && topic) setStep(2); }} style={{
-        color: step === 2 ? ORANGE : step > 2 ? INK : "#C5BFB7", cursor: "pointer",
+      <b onClick={() => { if (!busy && topic) setStep(2); }} title="点击返回选择版式" style={{
+        color: step === 2 ? ORANGE : step > 2 ? INK : "#C5BFB7", cursor: topic ? "pointer" : "default",
+        textDecoration: step > 2 ? "underline dotted rgba(0,0,0,.35)" : "none",
       }}>② 选择版式</b>
       <span style={{ color: "#D5CFC8" }}>→</span>
       <b onClick={() => { if (!busy && slides.length) setStep(3); }} style={{
-        color: step === 3 ? ORANGE : "#C5BFB7", cursor: "pointer",
+        color: step === 3 ? ORANGE : "#C5BFB7", cursor: slides.length ? "pointer" : "default",
       }}>③ 预览保存</b>
     </div>
   );
@@ -475,6 +477,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               <h3 style={{ margin: 0, fontSize: 15 }}>预览（{slides.length} 页）</h3>
               <span style={{ fontSize: 12, color: MUTED }}>点击任意一页可放大预览</span>
               <span style={{ flex: 1 }} />
+              <Btn kind="ghost" icon="arrowL" disabled={busy} onClick={() => setStep(2)}>← 返回修改</Btn>
               <label style={{ cursor: "pointer" }}>
                 <Btn kind="ghost" icon="upload" disabled={busy}>上传 PPT</Btn>
                 <input type="file" accept=".pptx" onChange={importPpt} style={{ display: "none" }} />

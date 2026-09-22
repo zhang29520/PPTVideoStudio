@@ -145,7 +145,7 @@ def _wrap(d: ImageDraw.ImageDraw, text: str, font, max_w: int, max_lines: int = 
 
 def _draw_content(img: Image.Image, d: ImageDraw.ImageDraw, index: int, total: int, topic: str,
                   title: str, bullets: List, primary, text,
-                  pic: Image.Image | None = None, slidev: bool = False):
+                  pic: Image.Image | None = None, slidev: bool = False, lead: str = ""):
     if slidev:
         bg, card_fill, card_edge, foot_c = (14, 17, 23), (28, 35, 50), (52, 62, 80), (120, 132, 150)
         d.rectangle([0, 0, W, H], fill=bg)
@@ -168,7 +168,14 @@ def _draw_content(img: Image.Image, d: ImageDraw.ImageDraw, index: int, total: i
     f_page = _font(24)
     f_num = _font(26)
     d.text((130, 90), title, font=f_title, fill=title_c)
-    d.rectangle([130, 186, 250, 198], fill=accent)
+    y0 = 280
+    if lead:
+        f_lead = _font(27)
+        d.text((130, 190), lead[:56], font=f_lead, fill=(110, 122, 138))
+        d.rectangle([130, 262, 250, 272], fill=accent)
+        y0 = 350
+    else:
+        d.rectangle([130, 186, 250, 198], fill=accent)
     if pic is not None:
         _paste_content_img(d, img, pic, primary)
 
@@ -176,7 +183,7 @@ def _draw_content(img: Image.Image, d: ImageDraw.ImageDraw, index: int, total: i
         max_card_w = W - 460 if pic is None else int(W * 0.56)
         f_body = _font(30)
         f_k = _font(33)
-        y = 280
+        y = y0
         for j, p in enumerate(pts):
             d.rounded_rectangle([110, y - 14, max_card_w + 40, y + 88], radius=16,
                                 fill=card_fill, outline=card_edge, width=2)
@@ -201,27 +208,30 @@ def _draw_content(img: Image.Image, d: ImageDraw.ImageDraw, index: int, total: i
         f_big = _font(92 if n <= 3 else 70)
         f_k = _font(32)
         f_v = _font(25)
+        top = y0
+        bh = min(460, H - 180 - top)
         for j, p in enumerate(items):
             x0 = 120 + j * (bw + gap)
-            d.rounded_rectangle([x0, 300, x0 + bw, 760], radius=22,
+            d.rounded_rectangle([x0, top, x0 + bw, top + bh], radius=22,
                                 fill=card_fill, outline=card_edge, width=2)
             num = _extract_num(p["v"]) or _extract_num(p["k"]) or "—"
-            d.text((x0 + 40, 350), num, font=f_big, fill=accent)
-            d.text((x0 + 40, 490), (p["k"] or "关键数据")[:10], font=f_k, fill=text)
+            d.text((x0 + 40, top + 50), num, font=f_big, fill=accent)
+            d.text((x0 + 40, top + 190), (p["k"] or "关键数据")[:10], font=f_k, fill=text)
             for li, ln in enumerate(_wrap(d, p["v"], f_v, bw - 80, 3)):
-                d.text((x0 + 40, 545 + li * 36), ln, font=f_v, fill=(110, 122, 138))
+                d.text((x0 + 40, top + 245 + li * 36), ln, font=f_v, fill=(110, 122, 138))
     else:  # grid 2×2
         f_k = _font(40)
         f_v = _font(28)
-        bw, bh = (W - 240 - 40) // 2, 290
+        bw = (W - 240 - 40) // 2
+        bh = min(280, (H - 180 - y0 - 36) // 2)
         for j, p in enumerate(pts[:4]):
             x0 = 120 + (j % 2) * (bw + 40)
-            y0 = 280 + (j // 2) * (bh + 36)
-            d.rounded_rectangle([x0, y0, x0 + bw, y0 + bh], radius=20,
+            cy = y0 + (j // 2) * (bh + 36)
+            d.rounded_rectangle([x0, cy, x0 + bw, cy + bh], radius=20,
                                 fill=card_fill, outline=card_edge, width=2)
-            d.text((x0 + 40, y0 + 40), (p["k"] or "要点")[:12], font=f_k, fill=accent)
+            d.text((x0 + 40, cy + 36), (p["k"] or "要点")[:12], font=f_k, fill=accent)
             for li, ln in enumerate(_wrap(d, p["v"], f_v, bw - 80, 3)):
-                d.text((x0 + 40, y0 + 110 + li * 42), ln, font=f_v, fill=text)
+                d.text((x0 + 40, cy + 104 + li * 42), ln, font=f_v, fill=text)
 
     d.text((130, H - 64), topic[:24], font=f_page, fill=foot_c)
     d.text((W - 180, H - 64), f"{index + 1} / {total}", font=f_page, fill=foot_c)
@@ -252,7 +262,8 @@ def _render_pillow(slides: List[Dict], out_dir: Path, theme: Dict | None) -> Lis
                         slidev=slidev)
         else:
             _draw_content(img, d, i, total, topic, s.get("title", ""),
-                          s.get("bullets", []) or [], primary, text, pic, slidev=slidev)
+                          s.get("bullets", []) or [], primary, text, pic, slidev=slidev,
+                          lead=str(s.get("lead", "")).strip())
         p = out_dir / f"page_{i:03d}.png"
         img.save(p)
         paths.append(p)
