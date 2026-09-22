@@ -91,6 +91,7 @@ export const api = {
   // 设置
   getSettings: () => req("/api/settings"),
   saveSettings: (s) => req("/api/settings", { method: "PUT", body: JSON.stringify(s) }),
+  testLlm: () => req("/api/settings/test_llm", { method: "POST" }),
 };
 
 /**

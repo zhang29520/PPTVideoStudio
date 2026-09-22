@@ -27,11 +27,17 @@ SCRIPT_PROMPT = """你是一名专业的演讲撰稿人。下面是一份 PPT �
 
 
 def _llm_call(payload_prompt: str, timeout: int = 180) -> str | None:
+    """兼容旧签名：只返回内容（错误丢弃，用 _llm_call_err 取错误）。"""
+    text, _ = _llm_call_err(payload_prompt, timeout)
+    return text
+
+
+def _llm_call_err(payload_prompt: str, timeout: int = 180) -> tuple[str | None, str | None]:
     from ..config import llm_settings
 
     cfg = llm_settings("script")
     if not (cfg["api_base"] and cfg["model"]):
-        return None
+        return None, None
     base = cfg["api_base"].rstrip("/")
     payload = {
         "model": cfg["model"],
@@ -49,29 +55,35 @@ def _llm_call(payload_prompt: str, timeout: int = 180) -> str | None:
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"]
-    except Exception:
-        return None
+        return data["choices"][0]["message"]["content"], None
+    except Exception as e:
+        detail = ""
+        if hasattr(e, "read"):
+            try:
+                detail = e.read().decode("utf-8", "ignore")[:200]
+            except Exception:
+                pass
+        return None, detail or str(e)[:200]
 
 
-def _llm_pages(topic: str, slides: List[Dict], tone: str) -> List[str] | None:
+def _llm_pages(topic: str, slides: List[Dict], tone: str) -> tuple[List[str] | None, str | None]:
     content = json.dumps(
         [{"title": x.get("title", ""), "bullets": x.get("bullets", [])} for x in slides],
         ensure_ascii=False,
     )
-    text = _llm_call(SCRIPT_PROMPT.format(topic=topic, tone=tone, pages=content))
+    text, err = _llm_call_err(SCRIPT_PROMPT.format(topic=topic, tone=tone, pages=content))
     if not text:
-        return None
+        return None, err
     m = re.search(r"\[.*\]", text, re.S)
     if not m:
-        return None
+        return None, "AI 返回格式异常（未找到 JSON 数组）"
     try:
         arr = json.loads(m.group(0))
     except Exception:
-        return None
+        return None, "AI 返回格式异常（JSON 解析失败）"
     if isinstance(arr, list) and len(arr) == len(slides):
-        return [str(x).strip() for x in arr]
-    return None
+        return [str(x).strip() for x in arr], None
+    return None, f"AI 返回页数不符（{len(arr) if isinstance(arr, list) else '?'} / {len(slides)}）"
 
 
 # ---------------------------------------------------------------------------
@@ -154,12 +166,15 @@ def _template_pages(topic: str, slides: List[Dict], tone: str) -> List[str]:
 def generate_script(topic: str, slides: List[Dict], tone: str = "专业", progress=None) -> Dict:
     rep = progress or (lambda stage, ratio: None)
 
-    rep(0.2, "正在通读 PPT 内容…")
-    pages = _llm_pages(topic, slides, tone)
+    rep(0.2, "AI 正在通读 PPT 内容并撰写解说词…")
+    pages, llm_error = _llm_pages(topic, slides, tone)
     source = "llm"
     if not pages:
-        rep(0.6, "使用内容模板撰写解说词…")
+        if llm_error:
+            rep(0.6, f"AI 调用失败，使用模板兜底…")
+        else:
+            rep(0.6, "使用内容模板撰写解说词…")
         pages = _template_pages(topic, slides, tone)
         source = "template"
     rep(0.95, "解说词完成")
-    return {"pages": pages, "source": source}
+    return {"pages": pages, "source": source, "llm_error": llm_error}

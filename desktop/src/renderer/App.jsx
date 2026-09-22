@@ -277,7 +277,9 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
       await runTask(
         () => api.generatePpt(pid, { slides: count, color, style }),
         (t) => setProgress(t)
-      );
+      ).then((r) => {
+        if (r?.warning) { setMsg("AI 调用失败，已用内置引擎兜底：" + r.warning); setErr(true); }
+      });
       const d = await api.getSlides(pid);
       setSlides(d.slides || []);
       setThumbTick((t) => t + 1);
@@ -509,7 +511,8 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
         (t) => setProgress(t)
       );
       setScript(r.pages);
-      setMsg(r.source === "llm" ? "解说词已根据每页内容生成（AI）✔" : "已按每页内容生成解说词（内置引擎）✔ 接入 LLM 可获得更自然的讲稿");
+      if (r.warning) setMsg("AI 调用失败，已用内置引擎兜底：" + r.warning), setErr(true);
+      else setMsg(r.source === "llm" ? "解说词已根据每页内容生成（AI）✔" : "已按每页内容生成解说词（内置引擎）✔ 接入 LLM 可获得更自然的讲稿");
     } catch (e) { setMsg("失败：" + e.message); setErr(true); }
     finally { setBusy(false); setProgress(null); }
   }
@@ -811,6 +814,8 @@ function SettingsPanel() {
   const [s, setS] = useState(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
 
   useEffect(() => { api.getSettings().then(setS).catch((e) => setMsg("加载失败：" + e.message)); }, []);
 
@@ -818,6 +823,15 @@ function SettingsPanel() {
   async function save() {
     try { await api.saveSettings(s); setMsg("设置已保存 ✔"); setErr(false); }
     catch (e) { setMsg("保存失败：" + e.message); setErr(true); }
+  }
+  async function testLlm() {
+    setTesting(true); setTestResult(null);
+    try {
+      await api.saveSettings(s); // 先保存再测，保证测的是当前填写内容
+      const r = await api.testLlm();
+      setTestResult(r);
+    } catch (e) { setTestResult({ ok: false, error: e.message }); }
+    finally { setTesting(false); }
   }
 
   const LLMFields = ({ prefix, disabled }) => (
@@ -849,8 +863,18 @@ function SettingsPanel() {
           <span style={{ fontSize: 11, color: ORANGE, background: ORANGE_SOFT, padding: "2px 8px", borderRadius: 99, fontWeight: 600 }}>用于：大纲 + 逐页内容</span>
         </h3>
         <LLMFields prefix="ppt_llm" />
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
+          <Btn kind="ghost" onClick={testLlm} disabled={testing}>{testing ? "测试中…" : "测试连通"}</Btn>
+          {testResult && testResult.ok && (
+            <span style={{ fontSize: 13, color: "#1a7f37" }}>✔ 连通正常（模型：{testResult.model}）</span>
+          )}
+          {testResult && !testResult.ok && (
+            <span style={{ fontSize: 13, color: "#D93025", flex: 1, minWidth: 200 }}>✘ {testResult.error}</span>
+          )}
+        </div>
         <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.8, marginTop: 10 }}>
-          生成 PPT 时的资料抓取、大纲与每页要点都走这个模型。留空则使用内置内容引擎。
+          生成 PPT 时的资料抓取、大纲与每页要点都走这个模型。留空则使用内置内容引擎。<br />
+          常见模型名：DeepSeek 填 <b>deepseek-chat</b> 或 <b>deepseek-reasoner</b>；智谱 GLM 填 glm-4-air 等；Kimi 填 moonshot-v1-8k。API 地址填到根路径即可（如 https://api.deepseek.com）。
         </div>
       </div>
 

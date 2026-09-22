@@ -35,9 +35,11 @@ def generate_speech(project_id: str, payload: dict = None):
         p = store.load_project(project_id) or project
         p["script"] = result["pages"]
         p["script_source"] = result["source"]
+        p["script_llm_error"] = result.get("llm_error")
         _sync_notes(p)
         store.save_project(p)
-        return {"source": result["source"], "pages": result["pages"]}
+        return {"source": result["source"], "pages": result["pages"],
+                "warning": result.get("llm_error")}
 
     tid = tasks.start(job)
     return {"taskId": tid, "message": "解说词生成任务已启动"}

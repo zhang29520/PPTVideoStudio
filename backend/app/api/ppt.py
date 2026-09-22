@@ -50,10 +50,12 @@ def generate_ppt(project_id: str, payload: dict = None):
         project["slides"] = outline["slides"]
         project["outline_source"] = outline["source"]
         project["knowledge_used"] = outline.get("knowledge_used", False)
+        project["llm_error"] = outline.get("llm_error")
         progress(0.95, "正在构建 PPTX 文件…")
         _rebuild_pptx(project)
         store.save_project(project)
-        return {"source": outline["source"], "slides": len(project["slides"])}
+        return {"source": outline["source"], "slides": len(project["slides"]),
+                "warning": outline.get("llm_error")}
 
     tid = tasks.start(job)
     return {"taskId": tid, "message": "PPT 生成任务已启动"}

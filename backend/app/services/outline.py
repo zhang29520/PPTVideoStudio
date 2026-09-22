@@ -1,8 +1,8 @@
-"""大纲与幻灯片内容生成（v0.4.0 四段式流水线）。
+"""大纲与幻灯片内容生成。
 
-流程：主题分析 → 抓取网络资料 → LLM 生成大纲与逐页内容 →（无 LLM 时）
-基于资料的内容型模板兜底。未配置 LLM 时资料仍会被抓取并用于模板，
-保证每页要点与主题相关，而不是占位空话。
+LLM 可用时走两阶段：① 大纲（页标题+每页方向）→ ② 逐页扩写成实质要点
+（结合抓取资料，要求数据/案例/动作），比单次生成深度明显更好。
+LLM 失败时回退内容型模板，并把失败原因带回去显式提示用户。
 """
 import json
 import re
@@ -12,37 +12,47 @@ from typing import Dict, List
 from ..config import load_settings
 from .knowledge import knowledge_context
 
-OUTLINE_PROMPT = """你是一名资深 PPT 策划与撰稿专家。请根据【主题】和【参考资料】制作一份 PPT 的逐页内容。
+OUTLINE_PROMPT = """你是一名资深 PPT 策划专家。请为主题「{topic}」设计一份 {count} 页的 PPT 大纲（受众：{audience}）。
 
 要求：
-1. 共 {count} 页：第 1 页为封面（bullets 放副标题/汇报人等 1-2 条），最后 1 页为总结页，中间为内容页。
-2. 每个内容页的 bullets 为 3-5 条**实质内容**：具体的事实、数据、方法、案例、步骤，必须来自或提炼自参考资料与主题常识；禁止出现"要点一""落地路径"这类占位空话。
-3. 每条要点 15~40 字，可以直接口语引用。
-4. 内容要围绕主题层层展开：是什么 → 为什么 → 怎么做 → 效果/案例 → 总结。
-5. 受众是【{audience}】，用语专业但易懂。
+1. 第 1 页为封面（title=主题本身），最后 1 页为总结页，中间内容页结构多样（背景/现状数据/核心概念/方法路径/案例/对比/问题对策/趋势建议等，按主题特点选择）。
+2. 每页输出 title（12 字内）和 focus（这一页要讲什么方向，20~40 字，具体到要点维度，禁止空话）。
 
-参考资料（可能为空，为空时请依靠你自己的知识）：
+参考资料（可能为空）：
 {knowledge}
 
-只输出 JSON 数组，不要输出任何其他文字：
-[{{"title": "页面标题", "bullets": ["要点1", "要点2", ...]}}, ...]"""
+只输出 JSON 数组：[{{"title": "...", "focus": "..."}}, ...]"""
+
+CONTENT_PROMPT = """你是一名资深行业分析师兼 PPT 撰稿人。请把下面的大纲扩写成 PPT 逐页内容。
+
+主题：{topic}（受众：{audience}）
+
+大纲：
+{outline}
+
+参考资料：
+{knowledge}
+
+硬性要求：
+1. 保持大纲的页数与标题不变。
+2. 每个内容页 3~5 条 bullets；每条 15~45 字，必须是**实质内容**：具体的事实、数据、数字、案例名称、方法步骤、对比结论；优先使用参考资料中的真实信息，资料不足时用你的专业知识补充，但禁止编造精确数据。
+3. 封面页 bullets 放 1~2 条副标题信息；总结页放 3 条核心回顾。
+4. 禁止出现"要点一""核心内容""注意事项"这类占位空话；每条都要让听众能带走一个信息点。
+
+只输出 JSON 数组：[{{"title": "...", "bullets": ["...", ...]}}, ...]"""
 
 
-def _llm_call(prompt: str, timeout: int = 150) -> str | None:
-    from ..config import llm_settings
-
-    cfg = llm_settings("ppt")
-    if not (cfg["api_base"] and cfg["model"]):
-        return None
-    base = cfg["api_base"].rstrip("/")
+def _chat(base: str, key: str, model: str, prompt: str, temperature: float,
+          timeout: int = 150) -> tuple[str | None, str | None]:
+    """调用 OpenAI 兼容接口，返回 (content, error)。"""
     payload = {
-        "model": cfg["model"],
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.6,
+        "temperature": temperature,
     }
     headers = {"Content-Type": "application/json"}
-    if cfg["api_key"]:
-        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     try:
         req = urllib.request.Request(
             f"{base}/chat/completions",
@@ -51,31 +61,27 @@ def _llm_call(prompt: str, timeout: int = 150) -> str | None:
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"]
-    except Exception:
-        return None
+        return data["choices"][0]["message"]["content"], None
+    except Exception as e:
+        detail = ""
+        if hasattr(e, "read"):
+            try:
+                detail = e.read().decode("utf-8", "ignore")[:200]
+            except Exception:
+                pass
+        return None, detail or str(e)[:200]
 
 
-def _parse_slides(text: str | None, count: int) -> List[Dict] | None:
+def _parse_json_array(text: str | None):
     if not text:
         return None
     m = re.search(r"\[.*\]", text, re.S)
     if not m:
         return None
     try:
-        arr = json.loads(m.group(0))
+        return json.loads(m.group(0))
     except Exception:
         return None
-    if not isinstance(arr, list) or len(arr) < 2:
-        return None
-    slides = []
-    for it in arr:
-        title = str(it.get("title", "")).strip()
-        bullets = [str(b).strip() for b in it.get("bullets", []) if str(b).strip()]
-        if title:
-            slides.append({"title": title, "bullets": bullets})
-    # 页数不符时截断/保留
-    return slides[:count] if len(slides) >= count else slides
 
 
 def _template_generate(topic: str, slides_count: int, audience: str, knowledge: str) -> List[Dict]:
@@ -87,7 +93,6 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
         line = re.sub(r"^【([^】]{0,40})】\s*", "", line)
         line = re.sub(r"\d{4}[-年/]\d{1,2}[-月/]\d{1,2}日?\s*[·•]?\s*", "", line)
         line = re.sub(r"^[\s·•\-]+", "", line).strip()
-        # 去掉与标题重复的开头（如 "PFAS的介绍PFAS为..." 这类拼接）
         if 25 <= len(line) <= 90:
             facts.append(line)
 
@@ -99,7 +104,6 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
                     "工具与资源", "风险与合规", "实施步骤建议"]
     angle_pool = (angle_titles * ((middle // len(angle_titles)) + 1))[:middle]
 
-    # 把资料均摊到各内容页：每页尽量 2 条资料；资料不足时用自然衔接句
     per_page = max(1, (len(facts) + middle - 1) // max(1, middle)) if facts else 0
     fi = 0
     fillers = [
@@ -129,26 +133,82 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
     return slides[:slides_count]
 
 
+def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,
+                  progress=None) -> tuple[List[Dict] | None, str | None]:
+    """两阶段 LLM 生成：大纲 → 逐页扩写。失败返回 (None, error)。"""
+    from ..config import llm_settings
+
+    rep = progress or (lambda stage, ratio: None)
+    cfg = llm_settings("ppt")
+    if not (cfg["api_base"] and cfg["model"]):
+        return None, None  # 未配置不算错误
+
+    base = cfg["api_base"].rstrip("/")
+
+    # 阶段 1：大纲
+    rep(0.40, "AI 正在策划大纲…")
+    text, err = _chat(base, cfg["api_key"], cfg["model"],
+                      OUTLINE_PROMPT.format(topic=topic, count=slides_count,
+                                            audience=audience,
+                                            knowledge=knowledge or "（无）"),
+                      temperature=0.5)
+    if err:
+        return None, f"AI 大纲生成失败：{err}"
+    outline = _parse_json_array(text)
+    if not isinstance(outline, list) or len(outline) < 2:
+        return None, "AI 返回的大纲格式异常"
+
+    outline = outline[:slides_count]
+    outline_text = json.dumps(outline, ensure_ascii=False, indent=1)
+
+    # 阶段 2：逐页扩写
+    rep(0.60, "AI 正在逐页撰写内容…")
+    text, err = _chat(base, cfg["api_key"], cfg["model"],
+                      CONTENT_PROMPT.format(topic=topic, audience=audience,
+                                            outline=outline_text,
+                                            knowledge=knowledge or "（无）"),
+                      temperature=0.6, timeout=240)
+    if err:
+        return None, f"AI 内容生成失败：{err}"
+    arr = _parse_json_array(text)
+    if not isinstance(arr, list) or len(arr) < 2:
+        return None, "AI 返回的内容格式异常"
+
+    slides = []
+    for it in arr:
+        title = str(it.get("title", "")).strip()
+        bullets = [str(b).strip() for b in it.get("bullets", []) if str(b).strip()]
+        if title:
+            slides.append({"title": title, "bullets": bullets})
+    if len(slides) < 2:
+        return None, "AI 返回的内容页数不足"
+    return slides[:slides_count], None
+
+
 def generate_outline(
     topic: str, slides_count: int = 8, audience: str = "通用受众", progress=None
 ) -> Dict:
-    """progress(ratio: float, stage: str) 用于任务进度上报。"""
+    """progress(stage: str, ratio: float) 用于任务进度上报。
+
+    返回 {slides, source, knowledge_used, llm_error}：
+    llm_error 非 None 表示配置了 LLM 但调用失败（已回退内置引擎）。
+    """
     rep = progress or (lambda stage, ratio: None)
 
     rep(0.10, "正在分析主题并抓取相关资料…")
     knowledge = knowledge_context(topic)
 
-    rep(0.35, "资料就绪，正在生成大纲与逐页内容…")
-    prompt = OUTLINE_PROMPT.format(
-        count=slides_count, audience=audience, knowledge=knowledge or "（无）"
-    )
-    slides = _parse_slides(_llm_call(prompt), slides_count)
-    source = "llm"
+    slides, llm_error = _llm_generate(topic, slides_count, audience, knowledge, progress)
+    if slides:
+        rep(0.9, "AI 内容生成完毕")
+        return {"slides": slides, "source": "llm", "knowledge_used": bool(knowledge),
+                "llm_error": None}
 
-    if not slides:
+    if llm_error:
+        rep(0.65, "AI 调用失败，使用内置引擎兜底…")
+    else:
         rep(0.65, "使用内置内容引擎生成…")
-        slides = _template_generate(topic, slides_count, audience, knowledge)
-        source = "template"
-
+    slides = _template_generate(topic, slides_count, audience, knowledge)
     rep(0.9, "内容生成完毕")
-    return {"slides": slides, "source": source, "knowledge_used": bool(knowledge)}
+    return {"slides": slides, "source": "template", "knowledge_used": bool(knowledge),
+            "llm_error": llm_error}
