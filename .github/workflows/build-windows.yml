@@ -40,7 +40,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PVS_PORT = "8765"
-          $p = Start-Process -FilePath "..\desktop\resources\pvs-backend\pvs-backend.exe" -PassThru -WindowStyle Hidden
+          $p = Start-Process -FilePath ".\desktop\resources\pvs-backend\pvs-backend.exe" -PassThru -WindowStyle Hidden
           $ok = $false
           for ($i = 0; $i -lt 60; $i++) {
             Start-Sleep -Seconds 1
