@@ -61,8 +61,13 @@ def compose_video(
     fps: int = 30,
     transition: float = 0.5,
     subtitle: bool = True,
+    progress=None,
 ) -> Dict:
-    """合成最终 MP4。返回 {video_path, srt_path, duration, pages}。"""
+    """合成最终 MP4。返回 {video_path, srt_path, duration, pages}。
+
+    progress(ratio, message) 用于任务进度上报。
+    """
+    rep = progress or (lambda r, m: None)
     out = Path(out_dir)
     tmp = out / "tmp"
     (tmp / "png").mkdir(parents=True, exist_ok=True)
@@ -71,16 +76,20 @@ def compose_video(
     width, height = RES_MAP.get(resolution, RES_MAP["1080p"])
 
     # 1. 渲染页面
+    rep(0.05, "正在渲染页面画面…")
     pngs = render_slides(slides, tmp / "png")
 
     # 2. 字幕
+    rep(0.15, "正在生成字幕文件…")
     srt_path = out / f"{project_id}.srt"
     build_srt(script_pages, durations, srt_path)
 
     # 3. 每页段落
     seg_files: List[Path] = []
     td = max(0.0, min(transition, 1.0))
+    total = max(1, len(pngs))
     for i, png in enumerate(pngs):
+        rep(0.15 + 0.65 * i / total, f"正在合成第 {i + 1}/{total} 页画面与配音…")
         dur = max(2.0, durations[i] + 0.6)
         seg = tmp / "seg" / f"seg_{i:03d}.mp4"
         fade_out_st = max(0.0, dur - td)
@@ -107,6 +116,7 @@ def compose_video(
         seg_files.append(seg)
 
     # 4. concat
+    rep(0.82, "正在拼接视频片段…")
     concat_list = tmp / "concat.txt"
     concat_list.write_text(
         "".join(f"file '{p.resolve().as_posix()}'\n" for p in seg_files), encoding="utf-8"
@@ -119,6 +129,7 @@ def compose_video(
         raise RuntimeError("视频拼接失败（FFmpeg concat）")
 
     # 5. 烧录字幕（可选，依赖 libass）
+    rep(0.88, "正在处理字幕与最终封装…")
     final = out / f"{project_id}.mp4"
     if subtitle and _has_subtitles_filter():
         srt_escaped = str(srt_path.resolve()).replace("\\", "/").replace(":", "\\:")

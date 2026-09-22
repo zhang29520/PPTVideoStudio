@@ -10,6 +10,13 @@ from ..subproc import run_quiet
 from ..config import load_settings
 
 
+def speed_to_rate(speed: float) -> str:
+    """语速倍数（1=正常，0.1~1 慢放，1.1~2 快放）→ edge-tts rate 百分比字符串。"""
+    speed = max(0.1, min(2.0, float(speed)))
+    pct = round((speed - 1) * 100)
+    return f"+{pct}%" if pct >= 0 else f"{pct}%"
+
+
 def _audio_duration(path: Path) -> float:
     try:
         out = run_quiet(
@@ -48,10 +55,12 @@ def synthesize_pages(
     voice: str | None = None,
     rate: str | None = None,
     volume: str | None = None,
+    progress=None,
 ) -> Dict:
     """逐页合成音频，返回 {audio_paths, durations, engine}。
 
-    某页合成失败（网络/配额）→ 用 6 秒静音兜底，保证流水线不断。
+    某页合成失败（网络/配额）→ 用静音兜底，保证流水线不断。
+    progress(ratio, message) 用于任务进度上报。
     """
     s = load_settings()
     voice = voice or s["tts_voice"]
@@ -63,8 +72,11 @@ def synthesize_pages(
     audio_paths: List[str] = []
     durations: List[float] = []
     ok_count = 0
+    total = max(1, len(pages))
 
     for i, text in enumerate(pages):
+        if progress:
+            progress(i / total, f"正在合成第 {i + 1}/{total} 页配音…")
         p = out / f"page_{i:03d}.mp3"
         # 中文按 ~4.5 字/秒 估算兜底时长
         est = max(3.0, len(text) / 4.5 + 1.0)

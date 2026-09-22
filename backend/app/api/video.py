@@ -43,6 +43,7 @@ def export_video(project_id: str, payload: dict = None):
             fps=int(payload.get("fps", 30)),
             transition=float(payload.get("transition", 0.5)),
             subtitle=bool(payload.get("subtitle", True)),
+            progress=progress,
         )
         project["files"]["video"] = Path(result["video_path"]).name
         project["files"]["srt"] = Path(result["srt_path"]).name

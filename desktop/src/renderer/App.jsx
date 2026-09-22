@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "./api";
+import { api, runTask } from "./api";
 
-const APP_VERSION = "0.3.0";
+const APP_VERSION = "0.4.0";
 const ORANGE = "#FF6B35";
 const ORANGE_SOFT = "#FFF3EC";
 const INK = "#26221E";
@@ -94,6 +94,25 @@ function Msg({ text, error }) {
   );
 }
 
+/* 进度条：progress = {progress, message, status} */
+function Progress({ progress }) {
+  if (!progress) return null;
+  const pct = Math.round((progress.progress || 0) * 100);
+  return (
+    <div style={{ marginTop: 12, maxWidth: 560 }}>
+      <div style={{ background: "#F1EDE8", borderRadius: 8, height: 8, overflow: "hidden" }}>
+        <div style={{
+          width: `${pct}%`, background: ORANGE, height: "100%",
+          transition: "width .4s", borderRadius: 8,
+        }} />
+      </div>
+      <div style={{ color: MUTED, marginTop: 6, fontSize: 13 }}>
+        {progress.message || (progress.status === "done" ? "完成 ✔" : "处理中…")} {pct > 0 && pct < 100 ? `${pct}%` : ""}
+      </div>
+    </div>
+  );
+}
+
 const labelStyle = { fontSize: 13, color: MUTED, margin: "12px 0 6px" };
 const inputStyle = {
   width: "100%",
@@ -109,10 +128,12 @@ const inputStyle = {
 /* ---------- 第 1 步：新建 / 导入 ---------- */
 function StepCreate({ project, setProject, onCreated, goEdit }) {
   const [topic, setTopic] = useState("");
+  const [count, setCount] = useState(8);
   const [projects, setProjects] = useState([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState(false);
+  const [progress, setProgress] = useState(null);
 
   const refresh = useCallback(
     () => api.listProjects().then(setProjects).catch(() => {}),
@@ -122,22 +143,25 @@ function StepCreate({ project, setProject, onCreated, goEdit }) {
 
   async function create() {
     if (!topic.trim()) { setMsg("请先输入主题"); setErr(true); return; }
-    setBusy(true); setMsg("正在生成 PPT（约几秒钟）…"); setErr(false);
+    setBusy(true); setMsg(""); setErr(false); setProgress(null);
     try {
       const p = await api.createProject(topic);
-      await api.generatePpt(p.id, { slides: 8 });
+      await runTask(
+        () => api.generatePpt(p.id, { slides: count }),
+        (t) => setProgress(t)
+      );
       setProject({ id: p.id, topic });
       setMsg("PPT 已生成 ✔ 可在下方第 2 步编辑");
       refresh();
     } catch (e) {
       setMsg("出错：" + e.message); setErr(true);
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setProgress(null); }
   }
 
   async function importPpt(e) {
     const f = e.target.files?.[0];
     if (!f) return;
-    setBusy(true); setMsg("正在导入并解析 PPT…"); setErr(false);
+    setBusy(true); setMsg("正在导入并解析 PPT…"); setErr(false); setProgress(null);
     try {
       const p = await api.importPpt(f);
       setProject({ id: p.projectId, topic: f.name.replace(/\.pptx$/i, "") });
@@ -155,16 +179,27 @@ function StepCreate({ project, setProject, onCreated, goEdit }) {
 
   return (
     <>
-      <div style={{ display: "flex", gap: 10 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <input
           value={topic}
           onChange={(e) => setTopic(e.target.value)}
           placeholder="输入主题，例如：智慧文旅夜游项目汇报"
-          style={{ ...inputStyle, flex: 1 }}
+          style={{ ...inputStyle, flex: 1, minWidth: 240 }}
           onKeyDown={(e) => e.key === "Enter" && create()}
         />
+        <label style={{ fontSize: 13, color: MUTED, whiteSpace: "nowrap" }}>
+          页数
+          <input
+            type="number" min={4} max={20} value={count}
+            onChange={(e) => setCount(Math.max(4, Math.min(20, Number(e.target.value) || 8)))}
+            style={{ ...inputStyle, width: 64, marginLeft: 6 }}
+          />
+        </label>
         <Btn onClick={create} disabled={busy}>{busy ? "生成中…" : "生成 PPT"}</Btn>
       </div>
+      <p style={{ color: MUTED, fontSize: 12, margin: "8px 0 0" }}>
+        生成流程：分析主题 → 抓取网络资料 → 生成大纲 → 逐页撰写内容（页数 4–20 可调）
+      </p>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
         <span style={{ fontSize: 13, color: MUTED }}>或导入已有 PPT（.pptx）：</span>
@@ -178,6 +213,7 @@ function StepCreate({ project, setProject, onCreated, goEdit }) {
           <input type="file" accept=".pptx" onChange={importPpt} style={{ display: "none" }} />
         </label>
       </div>
+      <Progress progress={progress} />
       <Msg text={msg} error={err} />
 
       {projects.length > 0 && (
@@ -219,10 +255,18 @@ function StepEdit({ project, onScriptReady }) {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState(false);
   const [pptxUrl, setPptxUrl] = useState("");
+  const [progress, setProgress] = useState(null);
+  const [thumbTick, setThumbTick] = useState(0); // 保存后刷新缩略图
+  const [preview, setPreview] = useState(null);  // 大图预览页码
+
+  const loadThumb = useCallback(
+    (i) => api.thumbUrl(project.id, i).then((u) => `${u}?t=${thumbTick}`),
+    [project?.id, thumbTick]
+  );
 
   useEffect(() => {
     if (!project?.id) return;
-    setMsg(""); setScript([]);
+    setMsg(""); setScript([]); setProgress(null);
     api.getSlides(project.id).then((d) => setSlides(d.slides || [])).catch((e) => { setMsg(e.message); setErr(true); });
     api.getProject(project.id).then((p) => setScript(p.script || [])).catch(() => {});
     api.pptDownloadUrl(project.id).then(setPptxUrl);
@@ -241,18 +285,28 @@ function StepEdit({ project, onScriptReady }) {
 
   async function savePpt() {
     setBusy(true); setMsg(""); setErr(false);
-    try { await api.saveSlides(project.id, slides); setMsg("PPT 已保存并重建 PPTX ✔"); }
-    catch (e) { setMsg("保存失败：" + e.message); setErr(true); }
+    try {
+      await api.saveSlides(project.id, slides);
+      setThumbTick((t) => t + 1);
+      setMsg("PPT 已保存并重建 PPTX ✔");
+    } catch (e) { setMsg("保存失败：" + e.message); setErr(true); }
     finally { setBusy(false); }
   }
   async function genScript() {
-    setBusy(true); setMsg("AI 正在撰写解说词…"); setErr(false);
+    setBusy(true); setMsg(""); setErr(false); setProgress(null);
     try {
-      const r = await api.generateSpeech(project.id, { tone: "专业" });
+      const r = await runTask(
+        () => api.generateSpeech(project.id, { tone: "专业" }),
+        (t) => setProgress(t)
+      );
       setScript(r.pages);
-      setMsg(`解说词已生成（${r.source === "llm" ? "LLM" : "模板"}）✔`);
+      setMsg(
+        r.source === "llm"
+          ? "解说词已根据每页内容生成（AI）✔"
+          : "已按每页内容生成解说词（内置引擎）✔ 接入 LLM（高级设置）可获得更自然的讲稿"
+      );
     } catch (e) { setMsg("失败：" + e.message); setErr(true); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setProgress(null); }
   }
   async function saveScript() {
     setBusy(true); setMsg(""); setErr(false);
@@ -279,18 +333,23 @@ function StepEdit({ project, onScriptReady }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginTop: 14 }}>
         <div>
-          <div style={labelStyle}>页面内容</div>
+          <div style={labelStyle}>页面内容（点缩略图看大图）</div>
           {slides.map((s, i) => (
             <div key={i} style={{ border: `1px solid ${LINE}`, padding: 12, marginBottom: 10, borderRadius: 12 }}>
-              <div style={{ color: MUTED, fontSize: 12, marginBottom: 6 }}>第 {i + 1} 页</div>
-              <input value={s.title || ""} onChange={(e) => upd(i, "title", e.target.value)} style={{ ...inputStyle, marginBottom: 8 }} />
-              <textarea
-                value={(s.bullets || []).join("\n")}
-                onChange={(e) => upd(i, "bullets", e.target.value.split("\n").filter((x) => x.trim()))}
-                rows={Math.max(3, (s.bullets || []).length)}
-                style={{ ...inputStyle, resize: "vertical" }}
-                placeholder="每行一个要点"
-              />
+              <div style={{ display: "flex", gap: 10 }}>
+                <Thumb project={project} index={i} load={loadThumb} onZoom={() => setPreview(i)} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: MUTED, fontSize: 12, marginBottom: 6 }}>第 {i + 1} 页</div>
+                  <input value={s.title || ""} onChange={(e) => upd(i, "title", e.target.value)} style={{ ...inputStyle, marginBottom: 8 }} />
+                  <textarea
+                    value={(s.bullets || []).join("\n")}
+                    onChange={(e) => upd(i, "bullets", e.target.value.split("\n").filter((x) => x.trim()))}
+                    rows={Math.max(3, (s.bullets || []).length)}
+                    style={{ ...inputStyle, resize: "vertical", fontSize: 13 }}
+                    placeholder="每行一个要点"
+                  />
+                </div>
+              </div>
             </div>
           ))}
         </div>
@@ -310,8 +369,51 @@ function StepEdit({ project, onScriptReady }) {
           {!slides.length && <p style={{ color: MUTED, fontSize: 13 }}>—</p>}
         </div>
       </div>
+      <Progress progress={progress} />
       <Msg text={msg} error={err} />
+
+      {preview !== null && slides[preview] && (
+        <div onClick={() => setPreview(null)} style={{
+          position: "fixed", inset: 0, background: "rgba(30,25,20,.55)", zIndex: 90,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ textAlign: "center" }}>
+            <Thumb project={project} index={preview} load={loadThumb} big onZoom={() => {}} />
+            <div style={{ color: "#fff", fontSize: 14, marginTop: 10 }}>
+              第 {preview + 1} 页 · {slides[preview].title}
+              <span onClick={() => setPreview(null)} style={{ color: ORANGE, cursor: "pointer", marginLeft: 16 }}>关闭</span>
+            </div>
+          </div>
+        </div>
+      )}
     </>
+  );
+}
+
+/* 页面缩略图（懒加载渲染好的 PNG） */
+function Thumb({ project, index, load, onZoom, big }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    let alive = true;
+    load(index).then((u) => alive && setUrl(u)).catch(() => {});
+    return () => { alive = false; };
+  }, [load, index]);
+  const w = big ? 720 : 150;
+  return (
+    <div
+      onClick={onZoom}
+      style={{
+        width: w, height: (w * 9) / 16, flexShrink: 0, borderRadius: 8, overflow: "hidden",
+        background: "#F1EDE8", border: `1px solid ${LINE}`, cursor: big ? "default" : "zoom-in",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      {url ? (
+        <img src={url} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={`第${index + 1}页`} />
+      ) : (
+        <span style={{ color: MUTED, fontSize: 12 }}>渲染中…</span>
+      )}
+    </div>
   );
 }
 
@@ -325,12 +427,15 @@ const VOICES = [
 
 function StepAudio({ project, scriptReady, onAudioReady }) {
   const [voice, setVoice] = useState("zh-CN-XiaoxiaoNeural");
-  const [rate, setRate] = useState("+0%");
+  const [speed, setSpeed] = useState(1.0);
   const [audio, setAudio] = useState([]);
   const [audioUrls, setAudioUrls] = useState({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const previewRef = useRef(null);
 
   useEffect(() => {
     if (!project?.id) { setAudio([]); return; }
@@ -345,15 +450,34 @@ function StepAudio({ project, scriptReady, onAudioReady }) {
     })();
   }, [audio, project?.id]);
 
-  async function generate() {
-    setBusy(true); setMsg("正在逐页合成配音（首次较慢）…"); setErr(false);
+  const speedLabel = speed === 1 ? "正常" : speed < 1 ? `慢放 ×${speed.toFixed(1)}` : `快放 ×${speed.toFixed(1)}`;
+
+  function clampSpeed(v) {
+    const n = Number(v);
+    if (Number.isNaN(n)) return 1.0;
+    return Math.round(Math.max(0.1, Math.min(2.0, n)) * 10) / 10;
+  }
+
+  async function preview() {
     try {
-      const r = await api.generateTts(project.id, { voice, rate });
+      const u = `${await api.previewUrl(voice, clampSpeed(speed))}?t=${Date.now()}`;
+      setPreviewUrl(u);
+      setTimeout(() => previewRef.current?.play().catch(() => {}), 120);
+    } catch { setMsg("试听失败，请检查网络"); setErr(true); }
+  }
+
+  async function generate() {
+    setBusy(true); setMsg(""); setErr(false); setProgress(null);
+    try {
+      const r = await runTask(
+        () => api.generateTts(project.id, { voice, speed: clampSpeed(speed) }),
+        (t) => setProgress(t)
+      );
       setAudio(r.audio);
-      setMsg(`${r.message}（${r.engine}）✔`);
+      setMsg(`${r.message || "配音已生成"}（${r.engine}）✔`);
       onAudioReady();
     } catch (e) { setMsg("失败：" + e.message); setErr(true); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setProgress(null); }
   }
 
   if (!project?.id) return <p style={{ color: MUTED, fontSize: 13 }}>请先完成上方第 1、2 步</p>;
@@ -368,13 +492,26 @@ function StepAudio({ project, scriptReady, onAudioReady }) {
           </select>
         </label>
         <label style={{ fontSize: 13, color: MUTED }}>
-          语速：
-          <select value={rate} onChange={(e) => setRate(e.target.value)} style={{ ...inputStyle, width: 90, marginLeft: 6 }}>
-            {["-20%", "-10%", "+0%", "+10%", "+20%"].map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
+          语速（1=正常，0.1–1 慢放，1.1–2 快放）：
+          <input
+            type="number" min={0.1} max={2} step={0.1} value={speed}
+            onChange={(e) => setSpeed(e.target.value)}
+            onBlur={(e) => setSpeed(clampSpeed(e.target.value))}
+            style={{ ...inputStyle, width: 76, marginLeft: 6 }}
+          />
         </label>
+        <span style={{
+          fontSize: 12, color: ORANGE, background: ORANGE_SOFT,
+          borderRadius: 99, padding: "4px 10px", fontWeight: 600,
+        }}>{speedLabel}</span>
+        <Btn kind="soft" onClick={preview}>🔊 试听</Btn>
+        {previewUrl && <audio ref={previewRef} src={previewUrl} style={{ display: "none" }} />}
         <Btn onClick={generate} disabled={busy}>{busy ? "合成中…" : "生成配音"}</Btn>
       </div>
+      <p style={{ color: MUTED, fontSize: 12, margin: "8px 0 0" }}>
+        试试 0.8（稍慢更易听清）或 1.2（稍快更紧凑）；试听约需 2 秒合成。
+      </p>
+      <Progress progress={progress} />
 
       {audio.length > 0 && (
         <div style={{ marginTop: 16 }}>
@@ -467,7 +604,7 @@ function StepVideo({ project }) {
           </div>
           <div style={{ color: MUTED, marginTop: 6, fontSize: 13 }}>
             {progress.status === "running"
-              ? `合成中… ${Math.round((progress.progress || 0) * 100)}%`
+              ? `${progress.message || "合成中…"} ${Math.round((progress.progress || 0) * 100)}%`
               : progress.status === "done" ? "合成完成 ✔"
               : progress.status === "error" ? "失败：" + progress.error : progress.status}
           </div>

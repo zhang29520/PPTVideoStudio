@@ -1,23 +1,31 @@
-"""PPT 生成 / 编辑 / 导入 / 下载。"""
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+"""PPT 生成 / 编辑 / 导入 / 下载 / 缩略图。"""
+from hashlib import md5
+from pathlib import Path
 
-from .. import store
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
+
+from .. import store, tasks
 from ..services.outline import generate_outline
 from ..services.ppt_builder import build_pptx, parse_pptx
+from ..services.render import render_slides
 
 router = APIRouter()
+
+THUMB_W, THUMB_H = 480, 270
 
 
 def _rebuild_pptx(project: dict) -> str:
     """根据当前 slides 重建 PPTX，返回相对文件名。"""
-    from pathlib import Path
-
     d = Path(store.project_dir(project["id"]))
     out = d / "output.pptx"
     build_pptx(project["slides"], out)
     project["files"]["pptx"] = "output.pptx"
     return "output.pptx"
+
+
+def _slides_hash(slides: list) -> str:
+    return md5(repr(slides).encode("utf-8")).hexdigest()[:12]
 
 
 @router.post("/api/ppt/generate/{project_id}")
@@ -28,17 +36,22 @@ def generate_ppt(project_id: str, payload: dict = None):
     payload = payload or {}
     count = int(payload.get("slides", 8))
     audience = payload.get("audience", "通用受众")
-    outline = generate_outline(project["topic"], slides_count=count, audience=audience)
-    project["slides"] = outline["slides"]
-    project["outline_source"] = outline["source"]
-    _rebuild_pptx(project)
-    store.save_project(project)
-    return {
-        "projectId": project_id,
-        "source": outline["source"],
-        "slides": project["slides"],
-        "message": "PPT 已生成（可编辑 PPTX）",
-    }
+
+    def job(progress):
+        progress(0.05, "准备生成…")
+        outline = generate_outline(
+            project["topic"], slides_count=count, audience=audience, progress=progress
+        )
+        project["slides"] = outline["slides"]
+        project["outline_source"] = outline["source"]
+        project["knowledge_used"] = outline.get("knowledge_used", False)
+        progress(0.95, "正在构建 PPTX 文件…")
+        _rebuild_pptx(project)
+        store.save_project(project)
+        return {"source": outline["source"], "slides": len(project["slides"])}
+
+    tid = tasks.start(job)
+    return {"taskId": tid, "message": "PPT 生成任务已启动"}
 
 
 @router.get("/api/ppt/{project_id}")
@@ -71,9 +84,6 @@ def save_slides(project_id: str, payload: dict):
 async def import_ppt(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pptx"):
         raise HTTPException(400, "仅支持 .pptx 文件")
-    import tempfile
-    from pathlib import Path
-
     project = store.create_project(topic=file.filename.rsplit(".", 1)[0])
     d = Path(store.project_dir(project["id"]))
     upload = d / "upload.pptx"
@@ -93,8 +103,6 @@ def download_ppt(project_id: str):
     project = store.load_project(project_id)
     if not project:
         raise HTTPException(404, "项目不存在")
-    from pathlib import Path
-
     rel = project.get("files", {}).get("pptx")
     if not rel:
         raise HTTPException(404, "尚未生成 PPT")
@@ -102,3 +110,28 @@ def download_ppt(project_id: str):
     if not path.exists():
         raise HTTPException(404, "PPT 文件不存在")
     return FileResponse(path, filename=f"{project['topic'][:20] or project_id}.pptx")
+
+
+@router.get("/api/ppt/{project_id}/thumb/{index}.png")
+def slide_thumb(project_id: str, index: int):
+    """单页缩略图（按 slides 内容哈希缓存）。"""
+    project = store.load_project(project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    slides = project.get("slides", [])
+    if index < 0 or index >= len(slides):
+        raise HTTPException(404, "页码不存在")
+
+    h = _slides_hash(slides)
+    d = Path(store.project_dir(project_id))
+    thumb_dir = d / "thumbs" / h
+    thumb = thumb_dir / f"page_{index:03d}.png"
+    if not thumb.exists():
+        pngs = render_slides(slides, d / "thumbs_render" / h)
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+
+        img = Image.open(pngs[index])
+        img.thumbnail((THUMB_W, THUMB_H))
+        img.save(thumb)
+    return FileResponse(thumb, media_type="image/png")

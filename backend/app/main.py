@@ -31,6 +31,13 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/tasks/{task_id}")
+def get_task(task_id: str):
+    from . import tasks
+
+    return tasks.get(task_id)
+
+
 def run():
     import os
     import uvicorn
