@@ -97,10 +97,15 @@ _STYLE_CSS = {
 _DEFAULT_STYLE_CSS = _STYLE_CSS["简约商务"]
 
 
-def _cover_slide(topic: str, bullets: List[str]) -> str:
+def _cover_slide(topic: str, bullets: List[str], image: str | None = None) -> str:
     chips = "".join(f'<span class="chip">{html.escape(b)}</span>' for b in bullets[:3])
+    img_html = ""
+    if image:
+        img_html = (f'<img class="cover-img" src="{image}" alt="">'
+                    f'<div class="cover-shade"></div>')
     return f"""
-    <div class="slide cover">
+    <div class="slide cover{' has-img' if image else ''}">
+      {img_html}
       <div class="deco1"></div><div class="deco2"></div>
       <div class="cover-inner">
         <div class="kicker">PRESENTATION</div>
@@ -111,7 +116,8 @@ def _cover_slide(topic: str, bullets: List[str]) -> str:
     </div>"""
 
 
-def _content_slide(idx: int, total: int, topic: str, title: str, bullets: List[str], last: bool) -> str:
+def _content_slide(idx: int, total: int, topic: str, title: str, bullets: List[str],
+                   last: bool, image: str | None = None) -> str:
     if last:
         items = "".join(f'<div class="card"><div class="card-t">{html.escape(b)}</div></div>' for b in bullets[:3])
         return f"""
@@ -129,6 +135,21 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets: List[s
         for j, b in enumerate(bullets)
     )
     single = " single" if len(bullets) <= 3 else ""
+    if image:
+        # 左文右图版式
+        return f"""
+    <div class="slide content">
+      <div class="head-band"></div>
+      <div class="content-inner with-img">
+        <div class="txt-col">
+          <div class="slide-title">{html.escape(title)}</div>
+          <div class="head-bar"></div>
+          <div class="grid">{rows}</div>
+        </div>
+        <div class="img-wrap"><img src="{image}" alt=""></div>
+      </div>
+      <div class="foot"><span>{html.escape(topic)}</span><span>{idx + 1} / {total}</span></div>
+    </div>"""
     return f"""
     <div class="slide content">
       <div class="head-band"></div>
@@ -166,11 +187,12 @@ def build_slides_html(slides: List[Dict], theme: Dict | None) -> str:
     for i, s in enumerate(slides):
         title = s.get("title", "")
         bullets = [b for b in (s.get("bullets") or []) if str(b).strip()]
+        img = s.get("image") if isinstance(s.get("image"), str) and s.get("image").startswith("data:image") else None
         if i == 0:
-            parts.append(_cover_slide(title, bullets))
+            parts.append(_cover_slide(title, bullets, img))
         else:
             parts.append(
-                _content_slide(i, total, topic, title, bullets, last=(i == total - 1))
+                _content_slide(i, total, topic, title, bullets, last=(i == total - 1), image=img)
             )
 
     return f"""<!DOCTYPE html>
@@ -194,6 +216,21 @@ body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};backgro
 .content{{background:#F7F9FC;color:#2B3440;}}
 .content-inner{{padding:96px 130px 120px;display:flex;flex-direction:column;position:relative;z-index:2;height:100%;}}
 .content-inner.single{{justify-content:center;}}
+/* ---------- 配图版式 ---------- */
+.cover-img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}}
+.cover-shade{{position:absolute;inset:0;z-index:1;
+    background:linear-gradient(95deg,rgba(8,14,24,.88) 0%,rgba(8,14,24,.62) 48%,rgba(8,14,24,.28) 100%);}}
+.cover.has-img .deco1,.cover.has-img .deco2{{display:none;}}
+.content-inner.with-img{{display:grid;grid-template-columns:1.05fr .95fr;gap:52px;
+    align-content:start;}}
+.content-inner.with-img .slide-title,.content-inner.with-img .head-bar{{grid-column:1 / -1;}}
+.txt-col{{display:flex;flex-direction:column;gap:24px;}}
+.txt-col .grid{{gap:20px;}}
+.txt-col .card{{padding:22px 30px;}}
+.txt-col .card-t{{font-size:29px;}}
+.img-wrap{{border-radius:24px;overflow:hidden;box-shadow:0 18px 48px rgba(20,32,52,.18);
+    min-height:560px;align-self:stretch;border:1px solid rgba(120,140,170,.18);}}
+.img-wrap img{{width:100%;height:100%;object-fit:cover;display:block;}}
 .slide-title{{font-size:58px;font-weight:800;color:#1E2833;margin-bottom:26px;}}
 .head-bar{{margin-bottom:44px;}}
 .grid{{display:grid;grid-template-columns:1fr;gap:24px;align-content:start;}}

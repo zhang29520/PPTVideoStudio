@@ -6,6 +6,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from .. import store, tasks
+from ..services.images import attach_images
 from ..services.outline import generate_outline
 from ..services.ppt_builder import build_pptx, parse_pptx
 from ..services.render import render_slides
@@ -43,6 +44,7 @@ def generate_ppt(project_id: str, payload: dict = None):
     project["theme"] = theme
     use_llm = payload.get("engine", "ai") != "builtin"
     profile_id = payload.get("profile_id") or None
+    with_images = bool(payload.get("with_images", True))
 
     def job(progress):
         progress(0.05, "准备生成…")
@@ -54,11 +56,17 @@ def generate_ppt(project_id: str, payload: dict = None):
         project["outline_source"] = outline["source"]
         project["knowledge_used"] = outline.get("knowledge_used", False)
         project["llm_error"] = outline.get("llm_error")
+        img_count = 0
+        if with_images:
+            try:
+                img_count = attach_images(project["topic"], project["slides"], progress)
+            except Exception:
+                img_count = 0  # 配图失败不阻塞生成
         progress(0.95, "正在构建 PPTX 文件…")
         _rebuild_pptx(project)
         store.save_project(project)
         return {"source": outline["source"], "slides": len(project["slides"]),
-                "warning": outline.get("llm_error")}
+                "images": img_count, "warning": outline.get("llm_error")}
 
     tid = tasks.start(job)
     return {"taskId": tid, "message": "PPT 生成任务已启动"}

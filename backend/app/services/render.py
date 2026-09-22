@@ -4,6 +4,7 @@
 Electron 不在线或超时 → 回退 Pillow 直接绘制（同样应用主题色）。
 导入型 PPT 在 Windows 端可替换为 PowerPoint COM / LibreOffice 渲染钩子。
 """
+import io
 import shutil
 import time
 import uuid
@@ -57,47 +58,95 @@ def _theme_colors(theme: Dict | None):
     return primary, dark, (247, 249, 252), (51, 51, 51)
 
 
-def _draw_cover(img: ImageDraw.ImageDraw, title: str, bullets: List[str], primary, dark):
-    img.rectangle([0, 0, W, H], fill=primary)
-    # 装饰圆
-    img.ellipse([W - 420, -220, W + 260, 460], fill=dark)
-    img.ellipse([W - 620, H - 320, W - 180, H + 120], fill=dark)
+def _slide_image(s: Dict):
+    """slide["image"] data URI → PIL Image（失败返回 None）。"""
+    uri = s.get("image") if isinstance(s.get("image"), str) else ""
+    if not uri.startswith("data:image") or "," not in uri:
+        return None
+    try:
+        import base64
+        return Image.open(io.BytesIO(base64.b64decode(uri.split(",", 1)[1]))).convert("RGB")
+    except Exception:
+        return None
+
+
+def _paste_cover_bg(img: Image.Image, pic: Image.Image, primary):
+    """封面全幅背景图：cover 裁切铺满 + 主色调深色蒙版保证文字可读。"""
+    scale = max(W / pic.width, H / pic.height)
+    pw, ph = round(pic.width * scale) + 1, round(pic.height * scale) + 1
+    pic = pic.resize((pw, ph), Image.LANCZOS)
+    left, top = (pw - W) // 2, (ph - H) // 2
+    pic = pic.crop((left, top, left + W, top + H))
+    overlay = Image.new("RGB", (W, H), primary)
+    img.paste(Image.blend(pic, overlay, 0.72), (0, 0))
+
+
+def _paste_content_img(d: ImageDraw.ImageDraw, img: Image.Image, pic: Image.Image, primary):
+    """内容页右半幅配图（圆角矩形）。"""
+    x0, y0, x1, y1 = int(W * 0.60), 250, W - 130, H - 170
+    rw, rh = x1 - x0, y1 - y0
+    scale = max(rw / pic.width, rh / pic.height)
+    pw, ph = round(pic.width * scale) + 1, round(pic.height * scale) + 1
+    pic = pic.resize((pw, ph), Image.LANCZOS)
+    left, top = (pw - rw) // 2, (ph - rh) // 2
+    pic = pic.crop((left, top, left + rw, top + rh))
+    mask = Image.new("L", (rw, rh), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, rw - 1, rh - 1], radius=22, fill=255)
+    img.paste(pic, (x0, y0), mask)
+    d.rounded_rectangle([x0, y0, x1 - 1, y1 - 1], radius=22,
+                        outline=light_bg_of(primary), width=2)
+
+
+def _draw_cover(img: Image.Image, d: ImageDraw.ImageDraw, title: str, bullets: List[str],
+                primary, dark, pic: Image.Image | None = None):
+    if pic is not None:
+        _paste_cover_bg(img, pic, primary)
+    else:
+        d.rectangle([0, 0, W, H], fill=primary)
+        # 装饰圆
+        d.ellipse([W - 420, -220, W + 260, 460], fill=dark)
+        d.ellipse([W - 620, H - 320, W - 180, H + 120], fill=dark)
     f_title = _font(92)
     size = 92
     while size > 40 and f_title.getlength(title) > W - 420:
         size -= 4
         f_title = _font(size)
-    img.rectangle([160, 470, 320, 486], fill=(255, 255, 255))
-    img.text((160, 540), title, font=f_title, fill=(255, 255, 255))
+    d.rectangle([160, 470, 320, 486], fill=(255, 255, 255))
+    d.text((160, 540), title, font=f_title, fill=(255, 255, 255))
     if bullets:
         f_sub = _font(34)
-        img.text((160, 760), " / ".join(bullets[:3]), font=f_sub, fill=light_bg_of(primary))
+        d.text((160, 760), " / ".join(bullets[:3]), font=f_sub, fill=light_bg_of(primary))
 
 
 def light_bg_of(primary):
     return tuple(min(255, round(c + (255 - c) * 0.55)) for c in primary)
 
 
-def _draw_content(img: ImageDraw.ImageDraw, index: int, total: int, topic: str,
-                  title: str, bullets: List[str], primary, text):
-    img.rectangle([0, 0, W, H], fill=(247, 249, 252))
-    img.rectangle([0, 0, W, 12], fill=primary)
+def _draw_content(img: Image.Image, d: ImageDraw.ImageDraw, index: int, total: int, topic: str,
+                  title: str, bullets: List[str], primary, text,
+                  pic: Image.Image | None = None):
+    d.rectangle([0, 0, W, H], fill=(247, 249, 252))
+    d.rectangle([0, 0, W, 12], fill=primary)
+    if pic is not None:
+        _paste_content_img(d, img, pic, primary)
     f_title = _font(60)
     f_body = _font(36)
     f_page = _font(24)
     f_num = _font(26)
-    img.text((120, 90), title, font=f_title, fill=primary)
-    img.rectangle([120, 186, 240, 198], fill=primary)
+    d.text((120, 90), title, font=f_title, fill=primary)
+    d.rectangle([120, 186, 240, 198], fill=primary)
+    # 有配图时正文收窄到左半区
+    max_card_w = W - 460 if pic is None else int(W * 0.56)
     y = 280
     for j, b in enumerate(bullets):
         # 要点卡片
-        img.rounded_rectangle([110, y - 14, W - 120, y + 74], radius=16,
-                              fill=(255, 255, 255), outline=(228, 233, 240), width=2)
-        img.rounded_rectangle([138, y + 2, 206, y + 58], radius=12, fill=primary)
+        d.rounded_rectangle([110, y - 14, max_card_w + 40, y + 74], radius=16,
+                            fill=(255, 255, 255), outline=(228, 233, 240), width=2)
+        d.rounded_rectangle([138, y + 2, 206, y + 58], radius=12, fill=primary)
         num_txt = f"{j + 1:02d}"
         nw = f_num.getlength(num_txt)
-        img.text((172 - nw / 2, y + 14), num_txt, font=f_num, fill=(255, 255, 255))
-        max_w = W - 460
+        d.text((172 - nw / 2, y + 14), num_txt, font=f_num, fill=(255, 255, 255))
+        max_w = max_card_w - 240
         line, lines = "", []
         for ch in b:
             if f_body.getlength(line + ch) > max_w:
@@ -107,12 +156,12 @@ def _draw_content(img: ImageDraw.ImageDraw, index: int, total: int, topic: str,
                 line += ch
         lines.append(line)
         for li, ln in enumerate(lines[:2]):
-            img.text((240, y + 6 + li * 46), ln, font=f_body, fill=text)
+            d.text((240, y + 6 + li * 46), ln, font=f_body, fill=text)
         y += 108
         if y > H - 180:
             break
-    img.text((120, H - 64), topic[:24], font=f_page, fill=(150, 150, 150))
-    img.text((W - 180, H - 64), f"{index + 1} / {total}", font=f_page, fill=(150, 150, 150))
+    d.text((120, H - 64), topic[:24], font=f_page, fill=(150, 150, 150))
+    d.text((W - 180, H - 64), f"{index + 1} / {total}", font=f_page, fill=(150, 150, 150))
 
 
 def _render_pillow(slides: List[Dict], out_dir: Path, theme: Dict | None) -> List[Path]:
@@ -124,11 +173,12 @@ def _render_pillow(slides: List[Dict], out_dir: Path, theme: Dict | None) -> Lis
     for i, s in enumerate(slides):
         img = Image.new("RGB", (W, H), (255, 255, 255))
         d = ImageDraw.Draw(img)
+        pic = _slide_image(s)
         if i == 0:
-            _draw_cover(d, s.get("title", ""), s.get("bullets", []) or [], primary, dark)
+            _draw_cover(img, d, s.get("title", ""), s.get("bullets", []) or [], primary, dark, pic)
         else:
-            _draw_content(d, i, total, topic, s.get("title", ""),
-                          s.get("bullets", []) or [], primary, text)
+            _draw_content(img, d, i, total, topic, s.get("title", ""),
+                          s.get("bullets", []) or [], primary, text, pic)
         p = out_dir / f"page_{i:03d}.png"
         img.save(p)
         paths.append(p)

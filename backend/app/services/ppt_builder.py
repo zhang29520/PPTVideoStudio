@@ -1,7 +1,10 @@
 """可编辑 PPTX 构建：用 python-pptx 生成真正的文本框/形状。
 
-深蓝 #1a3a5c + 金色 #c9a96e 主题。
+深蓝 #1a3a5c + 金色 #c9a96e 主题；slide["image"]（data URI）存在时
+内容页自动切换为左文右图版式。
 """
+import base64
+import io
 import re
 from pathlib import Path
 from typing import Dict, List
@@ -58,6 +61,15 @@ def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = No
         bullets = s.get("bullets", []) or []
         is_cover = i == 0
 
+        # 配图（data URI → 内存流）
+        img_stream = None
+        uri = s.get("image") if isinstance(s.get("image"), str) else ""
+        if uri.startswith("data:image") and "," in uri:
+            try:
+                img_stream = io.BytesIO(base64.b64decode(uri.split(",", 1)[1]))
+            except Exception:
+                img_stream = None
+
         # 背景
         bg = slide.shapes.add_shape(1, 0, 0, SLIDE_W, SLIDE_H)
         bg.fill.solid()
@@ -66,6 +78,12 @@ def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = No
         bg.shadow.inherit = False
 
         if is_cover:
+            if img_stream:
+                # 封面右半幅配图
+                pic = slide.shapes.add_picture(
+                    img_stream, Emu(int(SLIDE_W * 0.60)), 0,
+                    width=Emu(int(SLIDE_W * 0.40)), height=SLIDE_H)
+                pic.shadow.inherit = False
             bar = slide.shapes.add_shape(1, Emu(914400), Emu(2743200), Emu(365760), Emu(1371600))
             bar.fill.solid()
             bar.fill.fore_color.rgb = GOLD
@@ -88,9 +106,17 @@ def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = No
             line.line.fill.background()
             line.shadow.inherit = False
 
+            if img_stream:
+                # 左文右图版式
+                pic = slide.shapes.add_picture(
+                    img_stream, Emu(int(SLIDE_W * 0.615)), Emu(int(SLIDE_H * 0.24)),
+                    width=Emu(int(SLIDE_W * 0.335)), height=Emu(int(SLIDE_H * 0.62)))
+                pic.shadow.inherit = False
+                body = slide.shapes.add_textbox(Emu(822960), Emu(2011680), Emu(6500000), Emu(4114800))
+            else:
+                body = slide.shapes.add_textbox(Emu(822960), Emu(2011680), Emu(10515600), Emu(4114800))
             # 要点区
             if bullets:
-                body = slide.shapes.add_textbox(Emu(822960), Emu(2011680), Emu(10515600), Emu(4114800))
                 tf = body.text_frame
                 tf.word_wrap = True
                 for j, b in enumerate(bullets):
