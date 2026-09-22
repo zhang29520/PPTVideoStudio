@@ -34,6 +34,9 @@ export const api = {
     req("/api/projects", { method: "POST", body: JSON.stringify({ topic }) }),
   getProject: (id) => req(`/api/projects/${id}`),
 
+  // 通用后台任务
+  task: (tid) => req(`/api/tasks/${tid}`),
+
   // PPT
   generatePpt: (id, cfg) =>
     req(`/api/ppt/generate/${id}`, { method: "POST", body: JSON.stringify(cfg || {}) }),
@@ -49,6 +52,7 @@ export const api = {
     return res.json();
   },
   pptDownloadUrl: async (id) => `${await getBase()}/api/ppt/${id}/download`,
+  thumbUrl: async (id, index) => `${await getBase()}/api/ppt/${id}/thumb/${index}.png`,
 
   // 解说词
   generateSpeech: (id, tone) =>
@@ -60,6 +64,8 @@ export const api = {
   generateTts: (id, cfg) =>
     req(`/api/tts/generate/${id}`, { method: "POST", body: JSON.stringify(cfg || {}) }),
   audioUrl: async (id, file) => `${await getBase()}/api/tts/${id}/audio/${file}`,
+  previewUrl: async (voice, speed) =>
+    `${await getBase()}/api/tts/preview?voice=${encodeURIComponent(voice || "")}&speed=${speed}`,
 
   // 视频
   exportVideo: (id, cfg) =>
@@ -71,3 +77,19 @@ export const api = {
   getSettings: () => req("/api/settings"),
   saveSettings: (s) => req("/api/settings", { method: "PUT", body: JSON.stringify(s) }),
 };
+
+/**
+ * 启动后台任务并轮询进度。
+ * start: () => Promise<{taskId}>；onProgress(t: task状态)
+ * 返回 task.result；出错抛异常。
+ */
+export async function runTask(start, onProgress) {
+  const r = await start();
+  for (;;) {
+    await new Promise((res) => setTimeout(res, 1200));
+    const t = await api.task(r.taskId);
+    onProgress && onProgress(t);
+    if (t.status === "done") return t.result || {};
+    if (t.status === "error") throw new Error(t.error || "任务失败");
+  }
+}

@@ -1,6 +1,8 @@
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 
-from .. import store
+from .. import store, tasks
 from ..services.ppt_builder import build_pptx
 from ..services.script_gen import generate_script
 
@@ -9,8 +11,6 @@ router = APIRouter()
 
 def _sync_notes(project: dict) -> None:
     """把解说词写入每页演讲者备注，并重建 PPTX。"""
-    from pathlib import Path
-
     for i, s in enumerate(project["slides"]):
         if i < len(project["script"]):
             s["notes"] = project["script"][i]
@@ -26,12 +26,21 @@ def generate_speech(project_id: str, payload: dict = None):
     if not project.get("slides"):
         raise HTTPException(400, "请先生成或导入 PPT")
     tone = (payload or {}).get("tone", "专业")
-    result = generate_script(project["topic"], project["slides"], tone=tone)
-    project["script"] = result["pages"]
-    project["script_source"] = result["source"]
-    _sync_notes(project)
-    store.save_project(project)
-    return {"pages": result["pages"], "source": result["source"], "message": "解说词已生成"}
+    slides_snapshot = [dict(s) for s in project["slides"]]
+    topic = project["topic"]
+
+    def job(progress):
+        result = generate_script(topic, slides_snapshot, tone=tone, progress=progress)
+        # 任务线程内重新加载最新项目，避免覆盖并发编辑
+        p = store.load_project(project_id) or project
+        p["script"] = result["pages"]
+        p["script_source"] = result["source"]
+        _sync_notes(p)
+        store.save_project(p)
+        return {"source": result["source"], "pages": result["pages"]}
+
+    tid = tasks.start(job)
+    return {"taskId": tid, "message": "解说词生成任务已启动"}
 
 
 @router.put("/api/speech/{project_id}")
