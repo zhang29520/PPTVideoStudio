@@ -1,7 +1,8 @@
 {
   "name": "ppt-video-studio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Windows desktop studio: topic/content -> editable PPT, or PPT -> narration script -> TTS -> video.",
+  "author": "奇葩锅 <mr_xiaoping@163.com>",
   "main": "src/main/main.js",
   "scripts": {
     "dev": "concurrently -k \"npm run dev:backend\" \"vite\" \"wait-on tcp:5173 && electron .\"",
@@ -37,10 +38,13 @@
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.0.0",
-    "electron": "^33.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^6.0.0",
     "wait-on": "^8.0.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^26.0.0"
   }
 }
