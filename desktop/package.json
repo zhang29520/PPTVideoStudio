@@ -1,7 +1,7 @@
 {
   "name": "ppt-video-studio",
-  "version": "0.1.1",
-  "description": "Windows desktop studio: topic/content -> editable PPT, or PPT -> narration script -> TTS -> video.",
+  "version": "0.2.0",
+  "description": "PPT 一键转视频工作台：主题生成 PPT / 导入 PPT → 解说词 → 配音 → MP4。© 2026 梦极",
   "author": "奇葩锅 <mr_xiaoping@163.com>",
   "main": "src/main/main.js",
   "scripts": {
@@ -21,18 +21,31 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "resources/pvs-backend", "to": "pvs-backend" },
-      { "from": "resources/ffmpeg", "to": "ffmpeg" }
+      {
+        "from": "resources/pvs-backend",
+        "to": "pvs-backend"
+      },
+      {
+        "from": "resources/ffmpeg",
+        "to": "ffmpeg"
+      }
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
-      ]
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "artifactName": "${productName} Setup ${version}.${ext}"
     }
   },
   "dependencies": {

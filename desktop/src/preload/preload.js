@@ -1,7 +1,9 @@
-// 预加载脚本：安全地把后端 API 暴露给渲染层
+// 预加载脚本：安全地把主进程能力暴露给渲染层
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("api", {
-  backendStatus: () => ipcRenderer.invoke("app:backendStatus"),
-  // 渲染层可继续扩展：生成 PPT、生成讲稿、TTS、视频导出等
+contextBridge.exposeInMainWorld("pvs", {
+  backendInfo: () => ipcRenderer.invoke("app:backendInfo"),
+  onBackendReady: (cb) => ipcRenderer.on("app:backend-ready", () => cb()),
+  openLogs: () => ipcRenderer.invoke("app:openLogs"),
+  restartBackend: () => ipcRenderer.invoke("app:restartBackend"),
 });
