@@ -24,9 +24,10 @@ jobs:
       - name: Build backend exe (PyInstaller)
         run: |
           cd backend
-          pip install -r requirements.txt pyinstaller httpx
+          pip install -r requirements.txt pyinstaller httpx python-multipart
           pyinstaller --onefile --name pvs-backend --paths . run_backend.py `
             --collect-all pptx `
+            --collect-all multipart `
             --hidden-import uvicorn.logging `
             --hidden-import uvicorn.loops.auto `
             --hidden-import uvicorn.protocols.http.auto `
