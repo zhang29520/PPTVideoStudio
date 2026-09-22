@@ -98,9 +98,14 @@ def _paste_content_img(d: ImageDraw.ImageDraw, img: Image.Image, pic: Image.Imag
 
 
 def _draw_cover(img: Image.Image, d: ImageDraw.ImageDraw, title: str, bullets: List[str],
-                primary, dark, pic: Image.Image | None = None):
+                primary, dark, pic: Image.Image | None = None, slidev: bool = False):
     if pic is not None:
         _paste_cover_bg(img, pic, primary)
+    elif slidev:
+        # Slidev：暗黑平板底 + 左侧强调竖条
+        d.rectangle([0, 0, W, H], fill=(14, 17, 23))
+        d.rectangle([0, 0, 16, H], fill=light_bg_of(primary))
+        d.ellipse([W - 480, H - 420, W + 240, H + 300], fill=(22, 28, 40))
     else:
         d.rectangle([0, 0, W, H], fill=primary)
         # 装饰圆
@@ -108,11 +113,12 @@ def _draw_cover(img: Image.Image, d: ImageDraw.ImageDraw, title: str, bullets: L
         d.ellipse([W - 620, H - 320, W - 180, H + 120], fill=dark)
     f_title = _font(92)
     size = 92
-    while size > 40 and f_title.getlength(title) > W - 420:
+    while size > 40 and f_title.getlength(("> " if slidev else "") + title) > W - 420:
         size -= 4
         f_title = _font(size)
-    d.rectangle([160, 470, 320, 486], fill=(255, 255, 255))
-    d.text((160, 540), title, font=f_title, fill=(255, 255, 255))
+    if not slidev:
+        d.rectangle([160, 470, 320, 486], fill=(255, 255, 255))
+    d.text((160, 540), ("> " if slidev else "") + title, font=f_title, fill=(255, 255, 255))
     if bullets:
         f_sub = _font(34)
         d.text((160, 760), " / ".join(bullets[:3]), font=f_sub, fill=light_bg_of(primary))
@@ -124,28 +130,40 @@ def light_bg_of(primary):
 
 def _draw_content(img: Image.Image, d: ImageDraw.ImageDraw, index: int, total: int, topic: str,
                   title: str, bullets: List[str], primary, text,
-                  pic: Image.Image | None = None):
-    d.rectangle([0, 0, W, H], fill=(247, 249, 252))
-    d.rectangle([0, 0, W, 12], fill=primary)
+                  pic: Image.Image | None = None, slidev: bool = False):
+    if slidev:
+        bg, card_fill, card_edge, foot_c = (14, 17, 23), (28, 35, 50), (52, 62, 80), (120, 132, 150)
+        d.rectangle([0, 0, W, H], fill=bg)
+        d.rectangle([0, 0, 16, H], fill=light_bg_of(primary))
+        title_c = light_bg_of(primary)
+        # 底部进度条（Slidev 招牌）
+        pw = int(W * (index + 1) / total)
+        d.rectangle([0, H - 9, pw, H], fill=light_bg_of(primary))
+    else:
+        bg, card_fill, card_edge, foot_c = (247, 249, 252), (255, 255, 255), (228, 233, 240), (150, 150, 150)
+        d.rectangle([0, 0, W, H], fill=bg)
+        d.rectangle([0, 0, W, 12], fill=primary)
+        title_c = primary
     if pic is not None:
         _paste_content_img(d, img, pic, primary)
     f_title = _font(60)
     f_body = _font(36)
     f_page = _font(24)
     f_num = _font(26)
-    d.text((120, 90), title, font=f_title, fill=primary)
-    d.rectangle([120, 186, 240, 198], fill=primary)
+    d.text((130, 90), title, font=f_title, fill=title_c)
+    d.rectangle([130, 186, 250, 198], fill=light_bg_of(primary))
     # 有配图时正文收窄到左半区
     max_card_w = W - 460 if pic is None else int(W * 0.56)
     y = 280
     for j, b in enumerate(bullets):
         # 要点卡片
         d.rounded_rectangle([110, y - 14, max_card_w + 40, y + 74], radius=16,
-                            fill=(255, 255, 255), outline=(228, 233, 240), width=2)
-        d.rounded_rectangle([138, y + 2, 206, y + 58], radius=12, fill=primary)
+                            fill=card_fill, outline=card_edge, width=2)
+        d.rounded_rectangle([138, y + 2, 206, y + 58], radius=12, fill=light_bg_of(primary))
         num_txt = f"{j + 1:02d}"
         nw = f_num.getlength(num_txt)
-        d.text((172 - nw / 2, y + 14), num_txt, font=f_num, fill=(255, 255, 255))
+        d.text((172 - nw / 2, y + 14), num_txt, font=f_num,
+               fill=(13, 17, 23) if slidev else (255, 255, 255))
         max_w = max_card_w - 240
         line, lines = "", []
         for ch in b:
@@ -160,12 +178,16 @@ def _draw_content(img: Image.Image, d: ImageDraw.ImageDraw, index: int, total: i
         y += 108
         if y > H - 180:
             break
-    d.text((120, H - 64), topic[:24], font=f_page, fill=(150, 150, 150))
-    d.text((W - 180, H - 64), f"{index + 1} / {total}", font=f_page, fill=(150, 150, 150))
+    d.text((130, H - 64), topic[:24], font=f_page, fill=foot_c)
+    d.text((W - 180, H - 64), f"{index + 1} / {total}", font=f_page, fill=foot_c)
 
 
 def _render_pillow(slides: List[Dict], out_dir: Path, theme: Dict | None) -> List[Path]:
     primary, dark, _, text = _theme_colors(theme)
+    slidev = (theme or {}).get("style") == "Slidev 极客"
+    if slidev:
+        # Slidev 暗黑配色
+        text = (198, 210, 226)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: List[Path] = []
     total = len(slides)
@@ -175,10 +197,11 @@ def _render_pillow(slides: List[Dict], out_dir: Path, theme: Dict | None) -> Lis
         d = ImageDraw.Draw(img)
         pic = _slide_image(s)
         if i == 0:
-            _draw_cover(img, d, s.get("title", ""), s.get("bullets", []) or [], primary, dark, pic)
+            _draw_cover(img, d, s.get("title", ""), s.get("bullets", []) or [], primary, dark, pic,
+                        slidev=slidev)
         else:
             _draw_content(img, d, i, total, topic, s.get("title", ""),
-                          s.get("bullets", []) or [], primary, text, pic)
+                          s.get("bullets", []) or [], primary, text, pic, slidev=slidev)
         p = out_dir / f"page_{i:03d}.png"
         img.save(p)
         paths.append(p)

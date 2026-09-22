@@ -9,6 +9,7 @@ HTML 渲染引擎与 PPTX 构建器都能直接使用，无需额外文件管理
 import base64
 import hashlib
 import io
+import json
 import re
 import urllib.parse
 import urllib.request
@@ -73,33 +74,137 @@ def _compress(data: bytes) -> str | None:
     return f"data:image/jpeg;base64,{b64}"
 
 
-def _search_urls(query: str, limit: int = 12) -> list:
-    """Bing 图片搜索，返回候选原图 URL 列表（按相关性排序）。"""
+def _unescape_json(s: str) -> str:
+    s = s.replace("\\/", "/").replace('\\"', '"')
+    return re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), s)
+
+
+def _clean_title(s: str) -> str:
+    s = re.sub(r"<[^>]+>", "", s)  # <em> 高亮标签
+    import html as _html
+    return _html.unescape(s).strip()
+
+
+def _search_360(query: str, limit: int = 24) -> list:
+    """360 图片 JSON 接口（国内可达、稳定、免 key），返回 [(url, title)]。"""
+    u = ("https://image.so.com/j?q=" + urllib.parse.quote(query)
+         + "&src=srp&correct=&pn=30&sn=0")
+    try:
+        req = urllib.request.Request(u, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.loads(r.read().decode("utf-8", "ignore"))
+    except Exception:
+        return []
+    out = []
+    for item in d.get("list", []):
+        url = item.get("img") or ""
+        if not url.startswith("http"):
+            continue
+        w, h = item.get("width") or 0, item.get("height") or 0
+        if w and h and (w < MIN_W or h < MIN_H):
+            continue  # 尺寸预筛，省一次下载
+        out.append((url, _clean_title(item.get("title") or "")))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _search_bing(query: str, limit: int = 24) -> list:
+    """Bing 图片搜索备用图源，返回 [(url, title)]。"""
     try:
         page = _fetch(IMAGE_SEARCH_URL.format(q=urllib.parse.quote(query)))
     except Exception:
         return []
-    urls = []
-    # m="{&quot;murl&quot;:&quot;https://...&quot;,...} 原图地址
-    for m in re.finditer(r'murl&quot;:&quot;(.*?)&quot;', page):
-        u = m.group(1).replace("\\u002f", "/")
-        if u.startswith("http") and "." in u:
-            urls.append(u)
-    # 部分 CDN 返回未转义版本
-    if not urls:
-        for m in re.finditer(r'"murl":"(.*?)"', page):
-            u = m.group(1).replace("\\/", "/")
-            if u.startswith("http"):
-                urls.append(u)
-    # 去重
-    seen, out = set(), []
-    for u in urls:
-        if u not in seen:
-            seen.add(u)
-            out.append(u)
-        if len(out) >= limit:
+    results = []
+    for blk in page.split('class="iusc"')[1:]:
+        mu = re.search(r'murl&quot;:&quot;(.*?)&quot;', blk)
+        if not mu:
+            mu = re.search(r'"murl":"(.*?)"', blk)
+            if not mu:
+                continue
+            url = mu.group(1)
+            tm = re.search(r'"t":"(.*?)"', blk)
+        else:
+            url = mu.group(1)
+            tm = re.search(r'&quot;t&quot;:&quot;(.*?)&quot;', blk)
+        url = _unescape_json(url)
+        if not url.startswith("http") or "." not in url:
+            continue
+        title = _unescape_json(tm.group(1)) if tm else ""
+        results.append((url, title))
+        if len(results) >= limit:
             break
-    return out
+    return results
+
+
+def _search_images(query: str) -> list:
+    """多引擎图源：360 优先，Bing 兜底；返回首个有结果的引擎候选。"""
+    for fn in (_search_360, _search_bing):
+        try:
+            res = fn(query)
+        except Exception:
+            res = []
+        if res:
+            return res
+    return []
+
+
+# 进程内查询缓存 + 全局限速（搜索引擎对突发请求会降级返回无关缓存页）
+_qcache: dict = {}
+_last_ts = [0.0]
+
+
+def _search_images_cached(query: str) -> list:
+    import time
+    if query in _qcache:
+        return _qcache[query]
+    gap = 0.6 - (time.time() - _last_ts[0])
+    if gap > 0:
+        time.sleep(gap)
+    res = _search_images(query)
+    _last_ts[0] = time.time()
+    if not res:  # 空结果重试一次（限流抖动）
+        time.sleep(1.2)
+        res = _search_images(query)
+        _last_ts[0] = time.time()
+    _qcache[query] = res
+    return res
+
+
+# 图片搜索通用词：单独命中不算相关（"方法""路径"什么图都能匹配上）
+_IMG_GENERIC = {
+    "方法", "路径", "核心", "概念", "解读", "分析", "总结", "案例", "实践",
+    "步骤", "趋势", "背景", "现状", "展望", "要点", "对策", "建议", "资源",
+    "工具", "风险", "数据", "指标", "问题", "主要", "关键", "常见", "类型",
+}
+
+
+def _query_keywords(query: str) -> tuple:
+    """查询词 → (强关键词, 弱关键词)。
+
+    强词：完整中文段（智能体/开发实战）与英文词（ai/agent）——命中 1 个即相关；
+    弱词：中文 2-gram（剔除通用词）——需命中 ≥2 个才算相关。
+    """
+    strong, weak = [], []
+    for run in re.findall(r"[\u4e00-\u9fff]+|[A-Za-z0-9]+", query):
+        run = run.lower()
+        if len(run) >= 2 and run not in strong:
+            strong.append(run)
+        if re.match(r"[\u4e00-\u9fff]+$", run):
+            for i in range(len(run) - 1):
+                g = run[i:i + 2]
+                if g not in _IMG_GENERIC and g not in weak:
+                    weak.append(g)
+    return strong, weak
+
+
+def _title_relevant(title: str, strong: list, weak: list, relaxed: bool = False) -> bool:
+    t = title.lower()
+    if not t:
+        return True  # 无标题信息的候选不过滤（由尺寸/比例兜底）
+    if any(k in t for k in strong):
+        return True
+    return sum(1 for k in weak if k in t) >= (1 if relaxed else 2)
 
 
 def _slide_query(topic: str, title: str) -> list:
@@ -129,6 +234,8 @@ def attach_images(topic: str, slides: list, progress=None, per_page_timeout: flo
         return 0
 
     used_hashes: set = set()
+    pool: list = []  # 本次运行抓到的全部候选 (url, title)，供最后兜底复用
+    topic_strong, topic_weak = _query_keywords(topic)
     ok = 0
     total = len(slides)
 
@@ -138,25 +245,53 @@ def attach_images(topic: str, slides: list, progress=None, per_page_timeout: flo
         rep(0.88 + 0.05 * i / max(1, total), f"正在为第 {i + 1}/{total} 页配图…")
         queries = _slide_query(topic, s.get("title", ""))
         got = None
-        deadline_queries = queries[:2]  # 每页最多 2 个搜索词
-        for q in deadline_queries:
-            urls = _search_urls(q)
-            for u in urls:
-                data = _download(u)
-                if not data:
-                    continue
-                digest = hashlib.md5(data).hexdigest()
-                if digest in used_hashes:
-                    continue
-                uri = _compress(data)
-                if not uri:
-                    continue
-                used_hashes.add(digest)
-                got = uri
-                break
+        for q in queries[:3]:  # 每页最多 3 个搜索词
+            res = _search_images_cached(q)
+            pool.extend((u, t) for u, t in res)
+            strong, weak = _query_keywords(q)
+            # 两轮过滤：先严格（弱词需 2 命中），不够再放宽（弱词 1 命中）
+            for relaxed in (False, True):
+                for u, t in res:
+                    if not _title_relevant(t, strong, weak, relaxed=relaxed):
+                        continue
+                    data = _download(u)
+                    if not data:
+                        continue
+                    digest = hashlib.md5(data).hexdigest()
+                    if digest in used_hashes:
+                        continue
+                    uri = _compress(data)
+                    if not uri:
+                        continue
+                    used_hashes.add(digest)
+                    got = uri
+                    break
+                if got:
+                    break
             if got:
                 break
         if got:
             s["image"] = got
             ok += 1
+
+    # 终轮兜底：没配到图的页从本主题候选池里挑未使用的相关图（不发新搜索请求）
+    for i, s in enumerate(slides):
+        if not isinstance(s, dict) or s.get("image"):
+            continue
+        for u, t in pool:
+            if not _title_relevant(t, topic_strong, topic_weak, relaxed=True):
+                continue
+            data = _download(u)
+            if not data:
+                continue
+            digest = hashlib.md5(data).hexdigest()
+            if digest in used_hashes:
+                continue
+            uri = _compress(data)
+            if not uri:
+                continue
+            used_hashes.add(digest)
+            s["image"] = uri
+            ok += 1
+            break
     return ok

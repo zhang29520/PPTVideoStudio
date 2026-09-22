@@ -21,6 +21,10 @@ NAVY = RGBColor(0x1A, 0x3A, 0x5C)
 GOLD = RGBColor(0xC9, 0xA9, 0x6E)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 DARK = RGBColor(0x33, 0x33, 0x33)
+# Slidev 极客暗黑
+SLV_BG = RGBColor(0x0E, 0x11, 0x17)
+SLV_CARD = RGBColor(0x1C, 0x23, 0x32)
+SLV_TEXT = RGBColor(0xC6, 0xD2, 0xE2)
 
 FONT = "微软雅黑"
 
@@ -40,6 +44,7 @@ def _set_text(tf, text: str, size: int, color, bold=False, align=PP_ALIGN.LEFT):
 def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = None) -> Path:
     # 主题色：用户选择的 primary + 由它派生的强调色
     primary_hex = (theme or {}).get("primary") or "1a3a5c"
+    slidev = (theme or {}).get("style") == "Slidev 极客"
     primary_hex = primary_hex.lstrip("#")
     if len(primary_hex) == 3:
         primary_hex = "".join(x * 2 for x in primary_hex)
@@ -73,9 +78,17 @@ def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = No
         # 背景
         bg = slide.shapes.add_shape(1, 0, 0, SLIDE_W, SLIDE_H)
         bg.fill.solid()
-        bg.fill.fore_color.rgb = NAVY if is_cover else WHITE
+        bg.fill.fore_color.rgb = (SLV_BG if slidev else NAVY) if is_cover else \
+            (SLV_BG if slidev else WHITE)
         bg.line.fill.background()
         bg.shadow.inherit = False
+        if slidev and not is_cover:
+            # 左侧强调竖条
+            bar_l = slide.shapes.add_shape(1, 0, 0, Emu(140000), SLIDE_H)
+            bar_l.fill.solid()
+            bar_l.fill.fore_color.rgb = GOLD
+            bar_l.line.fill.background()
+            bar_l.shadow.inherit = False
 
         if is_cover:
             if img_stream:
@@ -99,7 +112,8 @@ def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = No
         else:
             # 标题区
             tb = slide.shapes.add_textbox(Emu(822960), Emu(548640), Emu(10515600), Emu(1005840))
-            _set_text(tb.text_frame, title, 30, NAVY, bold=True)
+            _set_text(tb.text_frame, f"// {title}" if slidev else title, 30,
+                      GOLD if slidev else NAVY, bold=True)
             line = slide.shapes.add_shape(1, Emu(822960), Emu(1554480), Emu(1828800), Emu(91440))
             line.fill.solid()
             line.fill.fore_color.rgb = GOLD
@@ -124,7 +138,7 @@ def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = No
                     run = p.add_run()
                     run.text = f"• {b}"
                     run.font.size = Pt(18)
-                    run.font.color.rgb = DARK
+                    run.font.color.rgb = SLV_TEXT if slidev else DARK
                     run.font.name = FONT
                     p.space_after = Pt(10)
 

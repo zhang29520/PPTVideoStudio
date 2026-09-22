@@ -233,7 +233,7 @@ const COLORS = [
   ["#FF6B35", "活力橙"], ["#1a3a5c", "深海军蓝"], ["#0F6B4C", "墨绿"],
   ["#5B3A8E", "紫罗兰"], ["#C0392B", "中国红"], ["#2C3E50", "石墨灰"],
 ];
-const STYLES = ["简约商务", "科技渐变", "清新留白", "图文并茂"];
+const STYLES = ["简约商务", "Slidev 极客", "科技渐变", "清新留白", "图文并茂"];
 
 function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   const [step, setStep] = useState(1); // 1 输入 2 版式 3 预览

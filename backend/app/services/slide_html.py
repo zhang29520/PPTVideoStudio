@@ -92,6 +92,40 @@ _STYLE_CSS = {
         .head-band{position:absolute;top:0;left:0;right:0;height:14px;background:{p};}
         .cover .rule{background:{p_light60};}
     """,
+    # Slidev 二开移植（MIT）：暗黑平板底 + 左侧强调竖条 + 底部进度条 + 极客等宽字体
+    "Slidev 极客": """
+        .slide{background:linear-gradient(115deg,#0e1117 0%,#131926 55%,{p_dark} 165%);}
+        .slide:before{content:'';position:absolute;inset:0;
+            background-image:radial-gradient(rgba(255,255,255,.045) 1.5px,transparent 1.5px);
+            background-size:52px 52px;opacity:.5;}
+        /* 左侧强调竖条（Slidev 招牌元素，复用 deco1/head-band） */
+        .slide.cover .deco1{left:0;top:0;bottom:0;right:auto;width:16px;height:auto;
+            border-radius:0;background:linear-gradient(180deg,{p_light40},{p_light20});}
+        .slide.cover .deco2{display:none;}
+        .content .head-band{right:auto;width:16px;height:100%;
+            background:linear-gradient(180deg,{p_light40},{p_light20});}
+        /* 底部进度条（Slidev 招牌元素，复用 .prog） */
+        .prog{display:block;position:absolute;bottom:0;left:0;height:9px;z-index:6;
+            background:linear-gradient(90deg,{p_light40},{p_light60});
+            box-shadow:0 0 18px {p_light40};}
+        .card{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.10);
+            border-radius:14px;box-shadow:none;}
+        .card:hover{transform:translateX(6px);transition:transform .2s;}
+        .num{background:linear-gradient(135deg,{p_light40},{p_light20});color:#0d1117;
+            font-family:'SF Mono',Menlo,Consolas,monospace;}
+        .slide-title{color:#fff;}
+        .slide-title:before{content:'// ';color:{p_light60};
+            font-family:'SF Mono',Menlo,Consolas,monospace;font-weight:600;}
+        .content{color:#C6D2E2;}
+        .cover .kicker{font-family:'SF Mono',Menlo,Consolas,monospace;letter-spacing:6px;
+            color:{p_light60};}
+        .cover .kicker:before{content:'> ';color:{p_light40};}
+        .chip{font-family:'SF Mono',Menlo,Consolas,monospace;background:rgba(255,255,255,.07);}
+        .foot{color:rgba(255,255,255,.38);font-family:'SF Mono',Menlo,Consolas,monospace;}
+        .cover .rule{background:{p_light60};}
+        .thanks{color:{p_light60};font-family:'SF Mono',Menlo,Consolas,monospace;}
+        .img-wrap{border-color:rgba(255,255,255,.14);box-shadow:0 18px 48px rgba(0,0,0,.45);}
+    """,
 }
 
 _DEFAULT_STYLE_CSS = _STYLE_CSS["简约商务"]
@@ -149,6 +183,7 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets: List[s
         <div class="img-wrap"><img src="{image}" alt=""></div>
       </div>
       <div class="foot"><span>{html.escape(topic)}</span><span>{idx + 1} / {total}</span></div>
+      <div class="prog" style="width:{(idx + 1) / total * 100:.1f}%"></div>
     </div>"""
     return f"""
     <div class="slide content">
@@ -159,6 +194,7 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets: List[s
         <div class="grid">{rows}</div>
       </div>
       <div class="foot"><span>{html.escape(topic)}</span><span>{idx + 1} / {total}</span></div>
+      <div class="prog" style="width:{(idx + 1) / total * 100:.1f}%"></div>
     </div>"""
 
 
@@ -231,6 +267,7 @@ body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};backgro
 .img-wrap{{border-radius:24px;overflow:hidden;box-shadow:0 18px 48px rgba(20,32,52,.18);
     min-height:560px;align-self:stretch;border:1px solid rgba(120,140,170,.18);}}
 .img-wrap img{{width:100%;height:100%;object-fit:cover;display:block;}}
+.prog{{display:none;}}
 .slide-title{{font-size:58px;font-weight:800;color:#1E2833;margin-bottom:26px;}}
 .head-bar{{margin-bottom:44px;}}
 .grid{{display:grid;grid-template-columns:1fr;gap:24px;align-content:start;}}
