@@ -79,38 +79,46 @@ def _parse_slides(text: str | None, count: int) -> List[Dict] | None:
 
 
 def _template_generate(topic: str, slides_count: int, audience: str, knowledge: str) -> List[Dict]:
-    """内容型模板兜底：从抓取到的资料里提炼要点，没有资料就用主题词构句。"""
+    """内容型模板兜底：把抓取到的资料逐条分配到各页，没有资料就用主题词构句。"""
     facts: List[str] = []
     for line in knowledge.splitlines():
         line = re.sub(r"^\d+\.\s*", "", line).strip()
-        if len(line) > 25:
+        # 清理资料来源装饰：开头【标题】、日期前缀、来源符号
+        line = re.sub(r"^【([^】]{0,40})】\s*", "", line)
+        line = re.sub(r"\d{4}[-年/]\d{1,2}[-月/]\d{1,2}日?\s*[·•]?\s*", "", line)
+        line = re.sub(r"^[\s·•\-]+", "", line).strip()
+        # 去掉与标题重复的开头（如 "PFAS的介绍PFAS为..." 这类拼接）
+        if 25 <= len(line) <= 90:
             facts.append(line)
 
     slides: List[Dict] = [{"title": topic, "bullets": [f"面向{audience}", "汇报人：PPTVideoStudio"]}]
 
     middle = max(0, slides_count - 2)
-    angles = []
-    if middle > 0:
-        angles.append(("背景与现状", [f"{topic}的由来与发展现状", "当前行业普遍做法与痛点", "本次分享要解决的问题"]))
-    if middle > 1:
-        angles.append(("核心概念", [f"{topic}是什么：关键定义与组成", "与相近概念的区别", "理解它的三个关键词"]))
-    if middle > 2:
-        angles.append(("主要方法与路径", ["整体思路与分步流程", "每一步的关键动作", "常用工具与资源"]))
-    if middle > 3:
-        angles.append(("典型案例", ["一个代表性案例的做法", "取得的实际效果", "可借鉴的经验"]))
-    if middle > 4:
-        angles.append(("衡量指标", ["评估效果的核心指标", "数据从哪里来", "达标的标准"]))
-    while len(angles) < middle:
-        n = len(angles) + 1
-        angles.append((f"专题拓展 {n}", [f"{topic}相关专题{n}的具体内容", "实践中的注意事项"]))
+    angle_titles = ["背景与现状", "核心概念解读", "主要方法与路径", "典型案例分析",
+                    "关键数据与指标", "常见问题与对策", "实践要点", "行业趋势",
+                    "工具与资源", "风险与合规", "实施步骤建议"]
+    angle_pool = (angle_titles * ((middle // len(angle_titles)) + 1))[:middle]
 
-    for i, (title, bullets) in enumerate(angles[:middle]):
-        # 有资料时用资料替换第一条要点
-        if facts:
-            bullets = [facts[i % len(facts)]] + bullets[1:]
-        slides.append({"title": title, "bullets": bullets})
+    # 把资料均摊到各内容页：每页尽量 2 条资料 + 1 条主题衔接句
+    per_page = max(1, (len(facts) + middle - 1) // max(1, middle)) if facts else 0
+    fi = 0
+    for i, title in enumerate(angle_pool):
+        bullets: List[str] = []
+        for _ in range(per_page):
+            if fi < len(facts):
+                bullets.append(facts[fi])
+                fi += 1
+        if not bullets:
+            bullets = [f"{topic}：{title}的核心内容与要点", "结合实际场景的具体做法与注意事项"]
+        elif len(bullets) == 1:
+            bullets.append(f"{title}对整体目标的意义与影响")
+        slides.append({"title": title, "bullets": bullets[:4]})
 
-    slides.append({"title": "总结与展望", "bullets": [f"回顾「{topic}」的核心要点", "明确下一步行动", "感谢聆听"]})
+    closing = [f"回顾「{topic}」的核心要点"]
+    if facts:
+        closing.append(facts[-1])
+    closing += ["明确下一步行动", "感谢聆听"]
+    slides.append({"title": "总结与展望", "bullets": closing})
     return slides[:slides_count]
 
 

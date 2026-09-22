@@ -2,7 +2,9 @@
 
 运行：cd backend && python -m app.main  （127.0.0.1:8000）
 """
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import ensure_dirs
@@ -36,6 +38,55 @@ def get_task(task_id: str):
     from . import tasks
 
     return tasks.get(task_id)
+
+
+# ---- HTML 渲染任务端点（Electron 渲染工作器对接） ----
+@app.get("/api/render/jobs/next")
+def render_next_job():
+    """Electron 渲染进程轮询领取任务。"""
+    from .services import render_queue
+
+    render_queue.cleanup()
+    job = render_queue.take_next()
+    return job or {}
+
+
+@app.get("/api/render/jobs/{job_id}.html")
+def render_job_html(job_id: str):
+    from fastapi.responses import HTMLResponse
+
+    from .services import render_queue
+
+    path = render_queue.get_html_path(job_id)
+    if not path:
+        raise HTTPException(404, "job not found")
+    return HTMLResponse(Path(path).read_text(encoding="utf-8"))
+
+
+@app.post("/api/render/jobs/{job_id}/png/{index}")
+async def render_job_png(job_id: str, index: int, request: Request):
+    from .services import render_queue
+
+    data = await request.body()
+    if not render_queue.save_png(job_id, index, data):
+        raise HTTPException(404, "job not found")
+    return {"ok": True}
+
+
+@app.post("/api/render/jobs/{job_id}/done")
+def render_job_done(job_id: str):
+    from .services import render_queue
+
+    render_queue.mark(job_id, "done")
+    return {"ok": True}
+
+
+@app.post("/api/render/jobs/{job_id}/fail")
+def render_job_fail(job_id: str):
+    from .services import render_queue
+
+    render_queue.mark(job_id, "failed")
+    return {"ok": True}
 
 
 def run():

@@ -19,7 +19,7 @@ def _rebuild_pptx(project: dict) -> str:
     """根据当前 slides 重建 PPTX，返回相对文件名。"""
     d = Path(store.project_dir(project["id"]))
     out = d / "output.pptx"
-    build_pptx(project["slides"], out)
+    build_pptx(project["slides"], out, theme=project.get("theme"))
     project["files"]["pptx"] = "output.pptx"
     return "output.pptx"
 
@@ -36,6 +36,11 @@ def generate_ppt(project_id: str, payload: dict = None):
     payload = payload or {}
     count = int(payload.get("slides", 8))
     audience = payload.get("audience", "通用受众")
+    theme = {
+        "primary": payload.get("color") or "#1a3a5c",
+        "style": payload.get("style") or "简约商务",
+    }
+    project["theme"] = theme
 
     def job(progress):
         progress(0.05, "准备生成…")
@@ -122,12 +127,12 @@ def slide_thumb(project_id: str, index: int):
     if index < 0 or index >= len(slides):
         raise HTTPException(404, "页码不存在")
 
-    h = _slides_hash(slides)
+    h = _slides_hash(slides) + "_" + (project.get("theme", {}).get("primary", "def")).lstrip("#")
     d = Path(store.project_dir(project_id))
     thumb_dir = d / "thumbs" / h
     thumb = thumb_dir / f"page_{index:03d}.png"
     if not thumb.exists():
-        pngs = render_slides(slides, d / "thumbs_render" / h)
+        pngs = render_slides(slides, d / "thumbs_render" / h, theme=project.get("theme"))
         thumb_dir.mkdir(parents=True, exist_ok=True)
         from PIL import Image
 

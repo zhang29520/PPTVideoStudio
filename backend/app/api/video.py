@@ -49,6 +49,7 @@ def export_video(project_id: str, payload: dict = None):
             progress=progress,
             pptx_path=pptx_path,
             follow_transition=bool(payload.get("follow_transition", False)),
+            theme=project.get("theme"),
         )
         project["files"]["video"] = Path(result["video_path"]).name
         project["files"]["srt"] = Path(result["srt_path"]).name

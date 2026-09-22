@@ -34,7 +34,19 @@ def _set_text(tf, text: str, size: int, color, bold=False, align=PP_ALIGN.LEFT):
     run.font.name = FONT
 
 
-def build_pptx(slides: List[Dict], out_path: str | Path) -> Path:
+def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = None) -> Path:
+    # 主题色：用户选择的 primary + 由它派生的强调色
+    primary_hex = (theme or {}).get("primary") or "1a3a5c"
+    primary_hex = primary_hex.lstrip("#")
+    if len(primary_hex) == 3:
+        primary_hex = "".join(x * 2 for x in primary_hex)
+    try:
+        nav = [int(primary_hex[i:i + 2], 16) for i in (0, 2, 4)]
+        NAVY = RGBColor(*nav)
+        GOLD = RGBColor(*[min(255, round(c + (255 - c) * 0.45)) for c in nav])
+    except Exception:
+        pass  # 解析失败沿用默认深蓝+金
+
     prs = Presentation()
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H

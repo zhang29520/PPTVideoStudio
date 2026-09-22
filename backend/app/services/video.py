@@ -64,6 +64,7 @@ def compose_video(
     progress=None,
     pptx_path: str | Path | None = None,
     follow_transition: bool = False,
+    theme: dict | None = None,
 ) -> Dict:
     """合成最终 MP4。返回 {video_path, srt_path, duration, pages, engine}。
 
@@ -94,7 +95,7 @@ def compose_video(
             rep(0.08, f"已获取原始画面（{engine}，{len(pngs)} 页）")
     if pngs is None:
         rep(0.06, "正在渲染页面画面…")
-        pngs = render_slides(slides, tmp / "png")
+        pngs = render_slides(slides, tmp / "png", theme=theme, html_timeout=45.0)
 
     # 2. 字幕
     rep(0.15, "正在生成字幕文件…")

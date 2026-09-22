@@ -201,6 +201,63 @@ async function checkUpdate() {
 }
 
 ipcMain.handle("app:checkUpdate", () => checkUpdate());
+
+/* ---------- HTML 幻灯片渲染工作器 ----------
+ * 后端把 slides HTML 登记为任务，这里用离屏窗口逐页截图回传 PNG。
+ * 出图质量即真实浏览器渲染效果（渐变/卡片/圆角/现代排版）。
+ */
+const { BrowserWindow: OffscreenWin } = require("electron");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function renderOneJob(job) {
+  const base = `http://127.0.0.1:${backendState.port}`;
+  const bw = new OffscreenWin({
+    show: false,
+    width: 1920,
+    height: 1080,
+    useContentSize: true,
+    webPreferences: { offscreen: true },
+  });
+  try {
+    await bw.loadURL(`${base}/api/render/jobs/${job.id}.html`);
+    let ready = false;
+    for (let t = 0; t < 40 && !ready; t++) {
+      ready = await bw.webContents.executeJavaScript("window.__READY__===true").catch(() => false);
+      if (!ready) await sleep(250);
+    }
+    if (!ready) throw new Error("slides html not ready");
+    for (let i = 0; i < job.count; i++) {
+      await bw.webContents.executeJavaScript(`window.__goto(${i})`);
+      await sleep(350); // 等字体/渐变绘制
+      const img = await bw.webContents.capturePage();
+      const buf = img.toPNG();
+      const r = await fetch(`${base}/api/render/jobs/${job.id}/png/${i}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: buf,
+      });
+      if (!r.ok) throw new Error(`png upload failed: ${i}`);
+    }
+    await fetch(`${base}/api/render/jobs/${job.id}/done`, { method: "POST" });
+  } catch (e) {
+    try {
+      await fetch(`${base}/api/render/jobs/${job.id}/fail`, { method: "POST" });
+    } catch {}
+  } finally {
+    try { bw.destroy(); } catch {}
+  }
+}
+
+function startRenderWorker() {
+  setInterval(async () => {
+    if (!backendState.ready) return;
+    try {
+      const res = await fetch(`http://127.0.0.1:${backendState.port}/api/render/jobs/next`);
+      const job = await res.json();
+      if (job && job.id) await renderOneJob(job);
+    } catch {}
+  }, 2500);
+}
 ipcMain.handle("app:openExternal", (_e, url) => {
   if (/^https:\/\//.test(url)) shell.openExternal(url);
 });
@@ -208,6 +265,7 @@ let updateCache = null;
 app.whenReady().then(async () => {
   createWindow();
   startBackend();
+  startRenderWorker();
   updateCache = await checkUpdate();
 });
 ipcMain.handle("app:updateInfo", () => updateCache || checkUpdate());
