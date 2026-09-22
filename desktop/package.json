@@ -1,0 +1,46 @@
+{
+  "name": "ppt-video-studio",
+  "version": "0.1.0",
+  "description": "Windows desktop studio: topic/content -> editable PPT, or PPT -> narration script -> TTS -> video.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm run dev:backend\" \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "dev:backend": "cd ../backend && python -m app.main",
+    "build": "vite build",
+    "start": "electron .",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.pptvideostudio.app",
+    "productName": "PPTVideoStudio",
+    "files": [
+      "dist/**",
+      "src/main/**",
+      "src/preload/**",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "resources/pvs-backend", "to": "pvs-backend" },
+      { "from": "resources/ffmpeg", "to": "ffmpeg" }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.0.0",
+    "electron": "^33.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.0",
+    "wait-on": "^8.0.0"
+  }
+}

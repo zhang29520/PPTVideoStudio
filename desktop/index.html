@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PPTVideoStudio</title>
+    <style>
+      body { margin: 0; background: #f5f7fb; color: #1f2933; }
+      * { box-sizing: border-box; }
+      h2 { margin: 0 0 12px; }
+      button {
+        background: #1a3a5c;
+        color: #fff;
+        border: 0;
+        padding: 10px 14px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.6; cursor: not-allowed; }
+      input, textarea, select {
+        border: 1px solid #d0d7e2;
+        border-radius: 8px;
+        padding: 8px 10px;
+      }
+      label { display: block; margin-top: 10px; color: #52606d; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/renderer/main.jsx"></script>
+  </body>
+</html>
