@@ -35,9 +35,14 @@ CONTENT_PROMPT = """你是一名资深行业分析师兼 PPT 撰稿人。请把�
 
 硬性要求：
 1. 保持大纲的页数与标题不变。
-2. 每个内容页 3~5 条 bullets；每条 15~45 字，必须是**实质内容**：具体的事实、数据、数字、案例名称、方法步骤、对比结论；优先使用参考资料中的真实信息，资料不足时用你的专业知识补充，但禁止编造精确数据。
-3. 封面页 bullets 放 1~2 条副标题信息；总结页放 3 条核心回顾。
-4. 禁止出现"要点一""核心内容""注意事项"这类占位空话；每条都要让听众能带走一个信息点。
+2. 每个内容页 3~5 条 bullets；每条必须是「关键词：描述」格式——
+   关键词 2~8 字（如"市场规模""政策红利""落地三步"），冒号用中文"："，
+   描述 15~45 字，必须是实质内容：具体数据、案例名称、方法步骤、对比结论。
+   示例："市场规模：2026 年智慧文旅市场规模预计突破 800 亿元，年增速约 25%"
+3. 含数据的要点务必把数字写进描述（300亿、35%、3倍 等），系统会自动渲染成大数字强调版式。
+4. 优先使用参考资料中的真实信息，资料不足时用专业知识补充，但禁止编造精确数据。
+5. 封面页 bullets 放 1~2 条副标题（无需关键词前缀）；总结页放 3 条核心回顾（带关键词前缀）。
+6. 禁止"要点一""核心内容"这类占位空话。
 
 只输出 JSON 数组：[{{"title": "...", "bullets": ["...", ...]}}, ...]"""
 
@@ -120,10 +125,12 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
                 bullets.append(facts[fi])
                 fi += 1
         if not bullets:
-            bullets = [f"围绕「{title}」，{topic}的核心做法与要点"]
+            bullets = [f"核心要点：围绕「{title}」，{topic}的核心做法与实施路径"]
         if len(bullets) == 1:
             bullets.append(fillers[i % len(fillers)])
-        slides.append({"title": title, "bullets": bullets[:4]})
+        # 结构化为「关键词：描述」，供版式引擎拆分渲染
+        bullets = [_structure_line(b, i) for b in bullets[:4]]
+        slides.append({"title": title, "bullets": bullets})
 
     closing = [f"回顾「{topic}」的核心要点"]
     if facts:
@@ -131,6 +138,17 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
     closing += ["明确下一步行动", "感谢聆听"]
     slides.append({"title": "总结与展望", "bullets": closing})
     return slides[:slides_count]
+
+
+def _structure_line(line: str, page_idx: int) -> str:
+    """模板路径的要点行 →「关键词：描述」结构（已有前缀则原样保留）。"""
+    import re as _re
+    if _re.match(r"^[^，,。：:|]{2,8}[：:|]", line):
+        return line
+    m = _re.match(r"([^，,]{2,6})[，,]", line)
+    if m:
+        return f"{m.group(1)}：{line[m.end():].strip()}"
+    return f"核心要点：{line}"
 
 
 def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,

@@ -135,11 +135,25 @@ def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = No
                 tf.word_wrap = True
                 for j, b in enumerate(bullets):
                     p = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
+                    # 结构化要点「关键词：描述」→ 关键词加粗强调
+                    k, v = b, ""
+                    if "：" in b[:10] or "|" in b[:10] or ":" in b[:10]:
+                        for sep in ("：", ":", "|"):
+                            if sep in b[:10]:
+                                k, v = b.split(sep, 1)
+                                break
                     run = p.add_run()
-                    run.text = f"• {b}"
+                    run.text = f"• {k}" + ("：" if v else "")
                     run.font.size = Pt(18)
-                    run.font.color.rgb = SLV_TEXT if slidev else DARK
+                    run.font.bold = bool(v)
+                    run.font.color.rgb = (SLV_TEXT if slidev else NAVY) if v else (SLV_TEXT if slidev else DARK)
                     run.font.name = FONT
+                    if v:
+                        run2 = p.add_run()
+                        run2.text = v
+                        run2.font.size = Pt(18)
+                        run2.font.color.rgb = SLV_TEXT if slidev else DARK
+                        run2.font.name = FONT
                     p.space_after = Pt(10)
 
         # 演讲者备注

@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from ..subproc import run_quiet
 from . import render_queue
-from .slide_html import build_slides_html
+from .slide_html import build_slides_html, split_point, _pick_layout, _extract_num
 
 W, H = 1920, 1080
 
@@ -128,15 +128,29 @@ def light_bg_of(primary):
     return tuple(min(255, round(c + (255 - c) * 0.55)) for c in primary)
 
 
+def _wrap(d: ImageDraw.ImageDraw, text: str, font, max_w: int, max_lines: int = 2) -> List[str]:
+    line, lines = "", []
+    for ch in text:
+        if font.getlength(line + ch) > max_w:
+            lines.append(line)
+            line = ch
+            if len(lines) >= max_lines:
+                return lines
+        else:
+            line += ch
+    if line:
+        lines.append(line)
+    return lines
+
+
 def _draw_content(img: Image.Image, d: ImageDraw.ImageDraw, index: int, total: int, topic: str,
-                  title: str, bullets: List[str], primary, text,
+                  title: str, bullets: List, primary, text,
                   pic: Image.Image | None = None, slidev: bool = False):
     if slidev:
         bg, card_fill, card_edge, foot_c = (14, 17, 23), (28, 35, 50), (52, 62, 80), (120, 132, 150)
         d.rectangle([0, 0, W, H], fill=bg)
         d.rectangle([0, 0, 16, H], fill=light_bg_of(primary))
         title_c = light_bg_of(primary)
-        # 底部进度条（Slidev 招牌）
         pw = int(W * (index + 1) / total)
         d.rectangle([0, H - 9, pw, H], fill=light_bg_of(primary))
     else:
@@ -144,42 +158,79 @@ def _draw_content(img: Image.Image, d: ImageDraw.ImageDraw, index: int, total: i
         d.rectangle([0, 0, W, H], fill=bg)
         d.rectangle([0, 0, W, 12], fill=primary)
         title_c = primary
-    if pic is not None:
-        _paste_content_img(d, img, pic, primary)
+    accent = light_bg_of(primary)
+
+    pts = [split_point(b) for b in bullets]
+    pts = [p for p in pts if p["v"]]
+    layout = _pick_layout(pts, "img" if pic is not None else None)
+
     f_title = _font(60)
-    f_body = _font(36)
     f_page = _font(24)
     f_num = _font(26)
     d.text((130, 90), title, font=f_title, fill=title_c)
-    d.rectangle([130, 186, 250, 198], fill=light_bg_of(primary))
-    # 有配图时正文收窄到左半区
-    max_card_w = W - 460 if pic is None else int(W * 0.56)
-    y = 280
-    for j, b in enumerate(bullets):
-        # 要点卡片
-        d.rounded_rectangle([110, y - 14, max_card_w + 40, y + 74], radius=16,
-                            fill=card_fill, outline=card_edge, width=2)
-        d.rounded_rectangle([138, y + 2, 206, y + 58], radius=12, fill=light_bg_of(primary))
-        num_txt = f"{j + 1:02d}"
-        nw = f_num.getlength(num_txt)
-        d.text((172 - nw / 2, y + 14), num_txt, font=f_num,
-               fill=(13, 17, 23) if slidev else (255, 255, 255))
-        max_w = max_card_w - 240
-        line, lines = "", []
-        for ch in b:
-            if f_body.getlength(line + ch) > max_w:
-                lines.append(line)
-                line = ch
-            else:
-                line += ch
-        lines.append(line)
-        for li, ln in enumerate(lines[:2]):
-            d.text((240, y + 6 + li * 46), ln, font=f_body, fill=text)
-        y += 108
-        if y > H - 180:
-            break
+    d.rectangle([130, 186, 250, 198], fill=accent)
+    if pic is not None:
+        _paste_content_img(d, img, pic, primary)
+
+    if layout in ("list", "split"):
+        max_card_w = W - 460 if pic is None else int(W * 0.56)
+        f_body = _font(30)
+        f_k = _font(33)
+        y = 280
+        for j, p in enumerate(pts):
+            d.rounded_rectangle([110, y - 14, max_card_w + 40, y + 88], radius=16,
+                                fill=card_fill, outline=card_edge, width=2)
+            d.rounded_rectangle([138, y + 8, 202, y + 66], radius=12, fill=accent)
+            num_txt = f"{j + 1:02d}"
+            d.text((170 - f_num.getlength(num_txt) / 2, y + 22), num_txt, font=f_num,
+                   fill=(13, 17, 23) if slidev else (255, 255, 255))
+            tx = 236
+            if p["k"]:
+                d.text((tx, y + 12), p["k"], font=f_k, fill=accent)
+                tx += f_k.getlength(p["k"]) + 18
+            for li, ln in enumerate(_wrap(d, p["v"], f_body, max_card_w - tx + 40, 2)):
+                d.text((tx if li == 0 else 236, y + 16 + li * 40), ln, font=f_body, fill=text)
+            y += 122
+            if y > H - 200:
+                break
+    elif layout == "stats":
+        items = pts[:4]
+        n = len(items)
+        gap = 30
+        bw = (W - 240 - gap * (n - 1)) // n
+        f_big = _font(92 if n <= 3 else 70)
+        f_k = _font(32)
+        f_v = _font(25)
+        for j, p in enumerate(items):
+            x0 = 120 + j * (bw + gap)
+            d.rounded_rectangle([x0, 300, x0 + bw, 760], radius=22,
+                                fill=card_fill, outline=card_edge, width=2)
+            num = _extract_num(p["v"]) or _extract_num(p["k"]) or "—"
+            d.text((x0 + 40, 350), num, font=f_big, fill=accent)
+            d.text((x0 + 40, 490), (p["k"] or "关键数据")[:10], font=f_k, fill=text)
+            for li, ln in enumerate(_wrap(d, p["v"], f_v, bw - 80, 3)):
+                d.text((x0 + 40, 545 + li * 36), ln, font=f_v, fill=(110, 122, 138))
+    else:  # grid 2×2
+        f_k = _font(40)
+        f_v = _font(28)
+        bw, bh = (W - 240 - 40) // 2, 290
+        for j, p in enumerate(pts[:4]):
+            x0 = 120 + (j % 2) * (bw + 40)
+            y0 = 280 + (j // 2) * (bh + 36)
+            d.rounded_rectangle([x0, y0, x0 + bw, y0 + bh], radius=20,
+                                fill=card_fill, outline=card_edge, width=2)
+            d.text((x0 + 40, y0 + 40), (p["k"] or "要点")[:12], font=f_k, fill=accent)
+            for li, ln in enumerate(_wrap(d, p["v"], f_v, bw - 80, 3)):
+                d.text((x0 + 40, y0 + 110 + li * 42), ln, font=f_v, fill=text)
+
     d.text((130, H - 64), topic[:24], font=f_page, fill=foot_c)
     d.text((W - 180, H - 64), f"{index + 1} / {total}", font=f_page, fill=foot_c)
+
+
+def _NUM_strip(v: str) -> str:
+    import re as _re
+    from .slide_html import _NUM_RE
+    return _NUM_RE.sub("", v, count=1).strip("，,。 ；：:：-—") or v
 
 
 def _render_pillow(slides: List[Dict], out_dir: Path, theme: Dict | None) -> List[Path]:
