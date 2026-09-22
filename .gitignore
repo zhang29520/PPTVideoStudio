@@ -1,6 +1,7 @@
 node_modules/
 dist/
-build/
+backend/build/
+!desktop/build/
 *.spec
 backend/.venv/
 backend/data/
