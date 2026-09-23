@@ -83,6 +83,8 @@ export const api = {
     req(`/api/speech/generate/${id}`, { method: "POST", body: JSON.stringify({ tone }) }),
   generateSpeechOne: (id, index) =>
     req(`/api/speech/generate-one/${id}`, { method: "POST", body: JSON.stringify({ index }) }),
+  useSpeechNotes: (id) =>
+    req(`/api/speech/use-notes/${id}`, { method: "POST", body: "{}" }),
   saveSpeech: (id, pages) =>
     req(`/api/speech/${id}`, { method: "PUT", body: JSON.stringify({ pages }) }),
 

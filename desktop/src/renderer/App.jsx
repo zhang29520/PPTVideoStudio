@@ -372,6 +372,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   const [aiList, setAiList] = useState([]);   // [{id,name,model}]
   const [engine, setEngine] = useState("builtin");
   const [fx, setFx] = useState(true);         // 随机切换动效
+  const [fromDocx, setFromDocx] = useState(false); // Word 导入项目
 
   const refresh = useCallback(() => api.listProjects().then(setProjects).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh, project?.id]);
@@ -406,6 +407,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
           engine: engine === "builtin" ? "builtin" : "ai",
           profile_id: engine === "builtin" ? undefined : engine,
           effects: fx,
+          use_docx: true,   // Word 导入项目：基于文档内容 AI 分析生成
         }),
         (t) => setProgress(t)
       ).then((r) => {
@@ -449,11 +451,10 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
       const p = await api.importDocx(f);
       const pid = p.projectId;
       setProject({ id: pid, topic: f.name.replace(/\.docx$/i, "") });
-      const d = await api.getSlides(pid);
-      setSlides(d.slides || []);
-      setThumbTick((t) => t + 1);
-      setStep(3);
-      setMsg(`Word 解析成功，已按文档结构生成 ${p.slides.length} 页，可在下方放大检查 ✔`);
+      setSlides([]);
+      setFromDocx(true);
+      setStep(2);   // 进入版式选择，点「开始生成」时基于 Word 内容 AI 分析生成
+      setMsg(`文档解析成功 ✔ 请在下方选择版式，点「开始生成」后将 AI 分析文档内容并重新设计框架`);
       refresh();
     } catch (e2) {
       setMsg("Word 解析失败：" + e2.message); setErr(true);
@@ -477,7 +478,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
 
   // 返回首页重新开始：清空当前项目回到输入主题
   function restartAll() {
-    setProject(null); setSlides([]); setTopic(""); setStep(1);
+    setProject(null); setSlides([]); setTopic(""); setStep(1); setFromDocx(false);
     setMsg(""); setProgress(null); setBusy(false);
     onProjectChanged?.();
   }
@@ -608,7 +609,11 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
           <div style={{ display: "flex", gap: 10, marginTop: 20, alignItems: "center", flexWrap: "wrap" }}>
             <Btn kind="ghost" icon="arrowL" onClick={() => setStep(1)}>上一步</Btn>
             <Btn onClick={startGenerate} disabled={busy}>{busy ? "生成中…" : "开始生成"}</Btn>
-            <span style={{ fontSize: 12, color: MUTED }}>分析主题 → 抓取网络资料 → 大纲 → 逐页内容</span>
+            <span style={{ fontSize: 12, color: MUTED }}>
+              {fromDocx
+                ? "将基于 Word 文档内容：AI 分析 → 框架设计 → 逐页生成"
+                : "分析主题 → 抓取网络资料 → 大纲 → 逐页内容"}
+            </span>
           </div>
           {noLLM && (
             <div style={{
@@ -733,19 +738,38 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
     finally { setBusyOne(-1); }
   }
 
+  const notesCount = slides.filter((s) => (s?.notes || "").trim()).length;
+
+  // 使用上传 PPT 自带的演讲者备注作为解说词
+  async function useNotes() {
+    setBusy(true); setMsg(""); setErr(false);
+    try {
+      const r = await api.useSpeechNotes(project.id);
+      setScript(r.script);
+      setMsg(`已使用 PPT 自带演讲稿（${r.used} 页）✔ 空白页可点「AI 重新生成本页」补齐`);
+      onScriptReady();
+    } catch (e) { setMsg(e.message); setErr(true); }
+    finally { setBusy(false); }
+  }
+
   if (!project?.id) return <p style={{ color: MUTED, fontSize: 13 }}>请先在首页生成或导入 PPT</p>;
 
   return (
     <>
       <h1 style={{ margin: 0, fontSize: 21 }}>解说词</h1>
       <p style={{ color: MUTED, fontSize: 13, margin: "4px 0 20px" }}>
-        基于每页实际内容撰写 · 修改自动保存并写入 PPT 备注 · 每页可单独 AI 重新生成
+        分析式讲解（不是逐字念 PPT） · 修改自动保存并写入 PPT 备注 · 每页可单独 AI 重新生成
       </p>
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
         <Btn kind="ghost" icon="arrowL" onClick={() => goPanel("home")}>← 返回首页</Btn>
         <Btn kind="soft" icon="refresh" onClick={genScript} disabled={busy || !slides.length}>
           {script.some((s) => (s || "").trim()) ? "AI 重新生成全部" : "AI 生成全部解说词"}
         </Btn>
+        {notesCount > 0 && (
+          <Btn kind="ghost" icon="script" onClick={useNotes} disabled={busy}>
+            📄 使用 PPT 自带演讲稿（{notesCount} 页）
+          </Btn>
+        )}
         <span style={{ flex: 1 }} />
         {progress && <div style={{ width: 180 }}><Progress progress={progress} /></div>}
       </div>

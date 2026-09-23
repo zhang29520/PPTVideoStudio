@@ -50,12 +50,16 @@ def parse_docx(file_path: str | Path, max_pages: int = 24) -> dict:
                 title = text
                 cur = {"heading": text, "level": 1, "paras": []}
                 sections.append(cur)
-            else:
-                cur = {"heading": "", "level": 1, "paras": []}
-                sections.append(cur)
-            cur["paras"].append(text)
-        else:
-            cur["paras"].append(text)
+                cur["paras"].append(text)
+                continue
+            cur = {"heading": "", "level": 1, "paras": []}
+            sections.append(cur)
+        elif len(cur["paras"]) >= 4:
+            # 任何一节段落过多（尤其无标题样式的长文档）都自动分页，
+            # 避免全文挤进一节导致只生成极少页数
+            cur = {"heading": "", "level": 1, "paras": []}
+            sections.append(cur)
+        cur["paras"].append(text)
 
     if not title:
         title = Path(file_path).stem
@@ -80,7 +84,7 @@ def docx_to_slides(file_path: str | Path, max_pages: int = 24) -> list:
     })
 
     for sec in data["sections"]:
-        heading = sec["heading"] or "正文摘要"
+        heading = sec["heading"] or ""
         # 合并 H2 到当前页要点
         pts: list = []
         for para in sec["paras"]:
@@ -88,8 +92,13 @@ def docx_to_slides(file_path: str | Path, max_pages: int = 24) -> list:
             if len(para) < 8:
                 continue
             pts.append(_condense(para))
+        if not pts and sec["paras"]:
+            pts.append(_condense(_clean(sec["paras"][0])))
         if not pts:
             continue
+        # 无标题的自动分段：取第一条正文前 16 字当页标题
+        if not heading:
+            heading = re.sub(r"[，。：；！？,.:;!?…\s].*$", "", _clean(sec["paras"][0]))[:16] or "正文摘要"
         lead = ""
         # 导语取第一条完整句
         raw = sec["paras"][0] if sec["paras"] else ""

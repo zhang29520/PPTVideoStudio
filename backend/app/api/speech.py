@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 from fastapi import APIRouter, HTTPException
 
@@ -82,6 +83,32 @@ def generate_one_speech(project_id: str, payload: dict = None):
     _sync_notes(p)
     store.save_project(p)
     return {"index": index, "page": text}
+
+
+@router.post("/api/speech/use-notes/{project_id}")
+def use_notes_speech(project_id: str, payload: dict = None):
+    """使用上传 PPT 自带的演讲者备注作为解说词（有备注的页用备注，无备注的页保留现值）。"""
+    project = store.load_project(project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    if not project.get("slides"):
+        raise HTTPException(400, "请先生成或导入 PPT")
+    used = 0
+    script = list(project.get("script") or [])
+    while len(script) < len(project["slides"]):
+        script.append("")
+    for i, s in enumerate(project["slides"]):
+        note = str((s or {}).get("notes", "") or "").strip()
+        if note:
+            script[i] = re.sub(r"\s+", " ", note)
+            used += 1
+    if not used:
+        raise HTTPException(400, "该 PPT 没有自带演讲稿（演讲者备注为空）")
+    project["script"] = script
+    project["script_source"] = "ppt_notes"
+    _sync_notes(project)
+    store.save_project(project)
+    return {"script": script, "used": used}
 
 
 @router.put("/api/speech/{project_id}")

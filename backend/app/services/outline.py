@@ -236,19 +236,24 @@ def analyze_topic(topic: str) -> str:
 
 def generate_outline(
     topic: str, slides_count: int = 8, audience: str = "通用受众", progress=None,
-    use_llm: bool = True, profile_id: str | None = None,
+    use_llm: bool = True, profile_id: str | None = None, material: str | None = None,
 ) -> Dict:
     """progress(stage: str, ratio: float) 用于任务进度上报。
 
     use_llm=False 时跳过 LLM 直接用内置引擎（首页可选择生成引擎）。
     profile_id 指定使用哪个已保存的 AI 配置（空=默认）。
+    material 非空时（Word 导入）跳过网络资料抓取，直接以文档内容为素材生成。
     返回 {slides, source, knowledge_used, llm_error}：
     llm_error 非 None 表示配置了 LLM 但调用失败（已回退内置引擎）。
     """
     rep = progress or (lambda stage, ratio: None)
 
-    rep(0.10, "正在分析主题并抓取相关资料…")
-    knowledge = knowledge_context(topic)
+    if material:
+        rep(0.10, "正在分析 Word 文档内容…")
+        knowledge = "以下是用 Word 文档导入的原始素材，大纲与内容必须基于这份材料展开：\n" + material
+    else:
+        rep(0.10, "正在分析主题并抓取相关资料…")
+        knowledge = knowledge_context(topic)
 
     slides, llm_error = (
         _llm_generate(topic, slides_count, audience, knowledge, progress, profile_id)

@@ -14,10 +14,11 @@ from ..config import load_settings
 SCRIPT_PROMPT = """你是一名专业的演讲撰稿人。下面是一份 PPT 的逐页内容（JSON），请为每一页写口语讲解词。
 
 硬性要求：
-1. 每页讲解词必须**基于该页的实际内容**（标题+要点）展开：把要点改写成自然的口语，补充一两句解释或衔接；禁止只复读标题，禁止使用与页面内容无关的套话。
-2. 每页 60~150 字；页与页之间有自然过渡（不要每页都用"接下来，我们来看"）。
-3. 第一页是开场白（问候+主题+预告结构）；最后一页是收尾（总结+致谢）。
-4. 只输出 JSON 数组（字符串数组，与页面对应），不要输出任何其他文字。
+1. **分析式讲解，不是朗读**：把每页要点当作论据素材，解读它的意义、原因、影响或对比；禁止把页面上的文字一字不差地念出来。要点里的数字和结论可以引用，但必须融入你自己的分析语句。
+2. 每页讲解词必须基于该页主题展开，与页面内容强相关；禁止无关套话。
+3. 每页 60~150 字；页与页之间有自然过渡（不要每页都用"接下来，我们来看"）。
+4. 第一页是开场白（问候+主题+预告结构）；最后一页是收尾（总结+致谢）。
+5. 只输出 JSON 数组（字符串数组，与页面对应），不要输出任何其他文字。
 
 主题：{topic}
 语气：{tone}
@@ -114,11 +115,18 @@ def _clean_spoken(b: str) -> str:
     return b.strip()
 
 
-def _bullet_to_sentence(b: str) -> str:
-    """把要点文本改写成口语句。"""
+def _bullet_to_sentence(b: str, first: bool = False) -> str:
+    """把要点文本改写成口语句（带分析框架，避免逐字念 PPT）。"""
     b = _clean_spoken(b)
     if not b:
         return ""
+    m = _KV_RE.match(b)
+    if m:  # 「关键词：描述」→「在关键词方面，描述」
+        k, v = m.group(1).strip(), m.group(2).strip()
+        conj = "首先，" if first else "同时，"
+        if v.endswith(("。", "！", "？", "；")):
+            return f"{conj}在{k}方面，{v}"
+        return f"{conj}在{k}方面，{v}。"
     if b.endswith(("。", "！", "？", "；")):
         return b
     return b + "。"
@@ -147,8 +155,8 @@ def _template_pages(topic: str, slides: List[Dict], tone: str) -> List[str]:
             tail = _bullet_to_sentence(key) if key else ""
             text = f"最后做个总结。{tail}以上就是今天分享的全部内容，感谢大家的聆听，欢迎会后交流讨论。"
         else:
-            # 内容页：把要点织进口语里
-            parts = [_bullet_to_sentence(str(b)) for b in bullets[:3]]
+            # 内容页：把要点织进分析式口播里（不逐字念原文）
+            parts = [_bullet_to_sentence(str(b), first=(j == 0)) for j, b in enumerate(bullets[:3])]
             body = "".join(parts) if parts else f"这一页讲的是{title}。"
             trans = _TRANSITIONS[min(i, len(_TRANSITIONS) - 1)]
             if i == 1:
@@ -166,7 +174,7 @@ def _template_pages(topic: str, slides: List[Dict], tone: str) -> List[str]:
 ONE_PAGE_PROMPT = """你是一名专业的演讲撰稿人。下面是一份 PPT 中某一页的内容，请为这一页写口语讲解词。
 
 硬性要求：
-1. 讲解词必须**基于该页实际内容**（标题+要点）展开：把要点改写成自然的口语，补充解释或衔接；禁止只复读标题，禁止无关套话。
+1. **分析式讲解，不是朗读**：把要点当作论据，解读意义、原因或影响；禁止把页面文字一字不差地念出来，数字和结论可引用但必须融入分析语句。
 2. 60~150 字，口语化，可直接朗读。
 {ctx}3. 只输出讲解词正文，不要输出任何其他文字（不要序号、不要标题、不要引号）。
 

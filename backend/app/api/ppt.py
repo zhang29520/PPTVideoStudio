@@ -31,6 +31,36 @@ def _slides_hash(slides: list) -> str:
     return md5(repr(slides).encode("utf-8")).hexdigest()[:12]
 
 
+def _real_pages(project: dict):
+    """导入型项目（upload.pptx）：用本机 Office/WPS/LibreOffice 渲染原始页面。
+
+    返回 PNG 路径列表；无转换器或失败返回 None（调用方回退内置版式渲染）。
+    结果按文件签名缓存，二次访问零开销。
+    """
+    rel = project.get("files", {}).get("pptx")
+    if rel != "upload.pptx":
+        return None
+    d = Path(store.project_dir(project["id"]))
+    pptx = d / rel
+    if not pptx.exists():
+        return None
+    sig = md5(f"{pptx.name}|{pptx.stat().st_size}".encode("utf-8")).hexdigest()[:12]
+    out = d / "thumbs_real" / sig
+    marker = out / ".done"
+    pngs = sorted(out.glob("page_*.png"))
+    if pngs and marker.exists():
+        return pngs
+    from .services.pptx_render import render_pptx_real
+
+    res = render_pptx_real(pptx, out)
+    if res:
+        pngs, _trans, _engine = res
+        if pngs:
+            marker.write_text("ok", encoding="utf-8")
+            return sorted(out.glob("page_*.png"))
+    return None
+
+
 @router.post("/api/ppt/generate/{project_id}")
 def generate_ppt(project_id: str, payload: dict = None):
     project = store.load_project(project_id)
@@ -50,12 +80,14 @@ def generate_ppt(project_id: str, payload: dict = None):
     profile_id = payload.get("profile_id") or None
     with_images = bool(payload.get("with_images", True))
     project["effects"] = bool(payload.get("effects", False))  # 随机切换动效
+    # Word 导入项目：可选基于文档内容生成（而非网络资料）
+    material = project.get("docx_text") if payload.get("use_docx") else None
 
     def job(progress):
         progress(0.05, "准备生成…")
         outline = generate_outline(
             project["topic"], slides_count=count, audience=audience, progress=progress,
-            use_llm=use_llm, profile_id=profile_id,
+            use_llm=use_llm, profile_id=profile_id, material=material,
         )
         project["slides"] = outline["slides"]
         project["outline_source"] = outline["source"]
@@ -138,6 +170,15 @@ async def import_docx(file: UploadFile = File(...)):
     if len(slides) < 2:
         raise HTTPException(400, "文档内容太少，无法生成 PPT（请确认有正文段落）")
     project["slides"] = slides
+    # 全文素材：供后续「AI 分析 → 框架设计 → 生成」使用
+    try:
+        from docx import Document as _Doc
+
+        paras = [_clean_text(p.text) for p in _Doc(str(upload)).paragraphs]
+        full = "\n".join(x for x in paras if x.strip())
+        project["docx_text"] = full[:6000]
+    except Exception:
+        project["docx_text"] = ""
     project["theme"] = {
         "primary": "#1a3a5c",
         "style": "简约商务",
@@ -150,6 +191,11 @@ async def import_docx(file: UploadFile = File(...)):
         "slides": slides,
         "message": f"Word 解析成功，已按文档结构生成 {len(slides)} 页",
     }
+
+
+def _clean_text(s: str) -> str:
+    import re as _re
+    return _re.sub(r"\s+", " ", s or "").strip()
 
 
 @router.get("/api/ppt/{project_id}/download")
@@ -168,7 +214,7 @@ def download_ppt(project_id: str):
 
 @router.get("/api/ppt/{project_id}/thumb/{index}.png")
 def slide_thumb(project_id: str, index: int):
-    """单页缩略图（按 slides 内容哈希缓存）。"""
+    """单页缩略图（按 slides 内容哈希缓存；导入型项目优先用原始 PPT 画面）。"""
     project = store.load_project(project_id)
     if not project:
         raise HTTPException(404, "项目不存在")
@@ -176,8 +222,24 @@ def slide_thumb(project_id: str, index: int):
     if index < 0 or index >= len(slides):
         raise HTTPException(404, "页码不存在")
 
-    h = _slides_hash(slides) + "_" + (project.get("theme", {}).get("primary", "def")).lstrip("#")
     d = Path(store.project_dir(project_id))
+    # 1. 导入型项目：优先渲染原始 PPT 页面（所见即所得）
+    real = _real_pages(project)
+    if real:
+        h = "real_" + md5(str(real[index]).encode("utf-8")).hexdigest()[:8]
+        thumb_dir = d / "thumbs" / h
+        thumb = thumb_dir / f"page_{index:03d}.png"
+        if not thumb.exists():
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            from PIL import Image
+
+            img = Image.open(real[index])
+            img.thumbnail((THUMB_W, THUMB_H))
+            img.save(thumb)
+        return FileResponse(thumb, media_type="image/png")
+
+    # 2. 生成型项目：内置版式渲染
+    h = _slides_hash(slides) + "_" + (project.get("theme", {}).get("primary", "def")).lstrip("#")
     thumb_dir = d / "thumbs" / h
     thumb = thumb_dir / f"page_{index:03d}.png"
     if not thumb.exists():
@@ -193,7 +255,7 @@ def slide_thumb(project_id: str, index: int):
 
 @router.get("/api/ppt/{project_id}/page/{index}.png")
 def slide_page_full(project_id: str, index: int):
-    """全尺寸单页图（点击放大预览用）。"""
+    """全尺寸单页图（点击放大预览用；导入型项目优先原始 PPT 画面）。"""
     project = store.load_project(project_id)
     if not project:
         raise HTTPException(404, "项目不存在")
@@ -201,7 +263,11 @@ def slide_page_full(project_id: str, index: int):
     if index < 0 or index >= len(slides):
         raise HTTPException(404, "页码不存在")
 
-    h = _slides_hash(slides) + "_" + (project.get("theme", {}).get("primary", "def")).lstrip("#")
     d = Path(store.project_dir(project_id))
+    real = _real_pages(project)
+    if real:
+        return FileResponse(real[index], media_type="image/png")
+
+    h = _slides_hash(slides) + "_" + (project.get("theme", {}).get("primary", "def")).lstrip("#")
     pngs = render_slides(slides, d / "thumbs_render" / h, theme=project.get("theme"))
     return FileResponse(pngs[index], media_type="image/png")
