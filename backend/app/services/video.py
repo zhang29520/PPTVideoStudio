@@ -2,8 +2,12 @@
 
 链路：slides JSON → Pillow 渲染 PNG → 每页段落(画面+配音+淡入淡出) → concat → MP4。
 同时产出 SRT 字幕；若本机 FFmpeg 支持 subtitles 滤镜则直接烧录字幕。
+
+effects=True 时启用「随机镜头动效」：每页随机 Ken Burns（推近/拉远/横移）
++ 随机淡入淡出时长，成片更有观感。
 """
 import json
+import random
 import shutil
 from pathlib import Path
 from typing import Dict, List
@@ -50,6 +54,28 @@ def _has_subtitles_filter() -> bool:
         return False
 
 
+def _ken_burns_filter(variant: int, width: int, height: int, fps: int, dur: float) -> str:
+    """随机镜头动效滤镜（zoompan）：0 推近 1 拉远 2 右移 3 左移。"""
+    frames = max(1, int(dur * fps) + 1)
+    if variant == 0:  # 缓慢推近
+        z = f"min(zoom+{0.10 / frames:.6f},1.10)"
+        x = "iw/2-(iw/zoom/2)"
+        y = "ih/2-(ih/zoom/2)"
+    elif variant == 1:  # 缓慢拉远
+        z = f"if(lte(on,1),1.10,max(1.0,zoom-{0.10 / frames:.6f}))"
+        x = "iw/2-(iw/zoom/2)"
+        y = "ih/2-(ih/zoom/2)"
+    elif variant == 2:  # 放大 + 向右平移
+        z = f"min(zoom+{0.08 / frames:.6f},1.08)"
+        x = "(iw-iw/zoom)*on/" + str(frames)
+        y = "ih/2-(ih/zoom/2)"
+    else:  # 放大 + 向左平移
+        z = f"min(zoom+{0.08 / frames:.6f},1.08)"
+        x = "(iw-iw/zoom)*(1-on/" + str(frames) + ")"
+        y = "ih/2-(ih/zoom/2)"
+    return (f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={width}x{height}:fps={fps}")
+
+
 def compose_video(
     slides: List[Dict],
     script_pages: List[str],
@@ -65,6 +91,7 @@ def compose_video(
     pptx_path: str | Path | None = None,
     follow_transition: bool = False,
     theme: dict | None = None,
+    effects: bool = False,
 ) -> Dict:
     """合成最终 MP4。返回 {video_path, srt_path, duration, pages, engine}。
 
@@ -103,6 +130,7 @@ def compose_video(
     build_srt(script_pages, durations, srt_path)
 
     # 3. 每页段落
+    rng = random.Random(project_id)  # 同项目每次生成动效一致
     seg_files: List[Path] = []
     td = max(0.0, min(transition, 1.0))
     total = max(1, len(pngs))
@@ -110,21 +138,28 @@ def compose_video(
         rep(0.15 + 0.65 * i / total, f"正在合成第 {i + 1}/{total} 页画面与配音…")
         dur = max(2.0, durations[i] + 0.6)
         seg = tmp / "seg" / f"seg_{i:03d}.mp4"
-        # 转场时长：跟随 PPT 动效 or 全局
+        # 转场时长：跟随 PPT 动效 or 全局；随机动效模式下每页微调
         eff_td = td
-        if follow_transition and transitions and i < len(transitions):
+        if effects:
+            eff_td = min(1.0, max(0.3, rng.uniform(0.35, 0.7)))
+        elif follow_transition and transitions and i < len(transitions):
             eff = transitions[i].get("effect", "global")
             if eff == "none":
                 eff_td = 0.0
             elif eff not in ("global",):
                 eff_td = max(0.0, min(1.5, float(transitions[i].get("duration", td))))
         fade_out_st = max(0.0, dur - eff_td)
-        vf = (
-            f"scale={width}:{height},"
-            f"fade=t=in:st=0:d={eff_td},fade=t=out:st={fade_out_st:.2f}:d={eff_td}"
-            if eff_td > 0
-            else f"scale={width}:{height}"
-        )
+        if effects:
+            # 随机 Ken Burns 镜头：先放大 2 倍渲染保证 zoompan 平滑不糊
+            filters = [f"scale={width * 2}:{height * 2}",
+                       _ken_burns_filter(rng.randrange(4), width, height, fps, dur)]
+        else:
+            filters = [f"scale={width}:{height}"]
+        if eff_td > 0:
+            fade_in_color = "white" if (effects and rng.random() < 0.3) else "black"
+            filters.append(f"fade=t=in:st=0:d={eff_td:.2f}:color={fade_in_color}")
+            filters.append(f"fade=t=out:st={fade_out_st:.2f}:d={eff_td:.2f}")
+        vf = ",".join(filters)
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1", "-framerate", str(fps), "-i", str(png),

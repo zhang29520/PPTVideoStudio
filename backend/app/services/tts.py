@@ -9,6 +9,21 @@ import edge_tts
 from ..subproc import run_quiet
 from ..config import load_settings
 
+# edge-tts 底层 aiohttp 默认不读系统代理环境变量（HTTP_PROXY），导致
+# 代理环境下直连微软 TTS 失败。打补丁让所有 ClientSession 默认 trust_env。
+import aiohttp
+
+_orig_session = aiohttp.ClientSession
+
+
+class _ProxyAwareSession(_orig_session):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("trust_env", True)
+        super().__init__(*args, **kwargs)
+
+
+aiohttp.ClientSession = _ProxyAwareSession
+
 
 def speed_to_rate(speed: float) -> str:
     """语速倍数（1=正常，0.1~1 慢放，1.1~2 快放）→ edge-tts rate 百分比字符串。"""
@@ -37,16 +52,22 @@ def _silence(path: Path, seconds: float) -> None:
     )
 
 
-def _synth_one(text: str, voice: str, rate: str, volume: str, out: Path) -> bool:
+def _synth_one(text: str, voice: str, rate: str, volume: str, out: Path, retries: int = 2) -> bool:
     async def run():
         tts = edge_tts.Communicate(text, voice, rate=rate, volume=volume)
         await tts.save(str(out))
 
-    try:
-        asyncio.run(run())
-        return out.exists() and out.stat().st_size > 1000
-    except Exception:
-        return False
+    for attempt in range(retries + 1):
+        try:
+            asyncio.run(run())
+            if out.exists() and out.stat().st_size > 1000:
+                return True
+        except Exception:
+            pass
+        if attempt < retries:
+            import time
+            time.sleep(1.2 * (attempt + 1))  # 网络抖动退避重试
+    return False
 
 
 def synthesize_pages(

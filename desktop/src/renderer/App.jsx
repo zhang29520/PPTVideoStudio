@@ -252,6 +252,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   const [noLLM, setNoLLM] = useState(false);
   const [aiList, setAiList] = useState([]);   // [{id,name,model}]
   const [engine, setEngine] = useState("builtin");
+  const [fx, setFx] = useState(true);         // 随机切换动效
 
   const refresh = useCallback(() => api.listProjects().then(setProjects).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh, project?.id]);
@@ -287,6 +288,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
           slides: count, color, style,
           engine: engine === "builtin" ? "builtin" : "ai",
           profile_id: engine === "builtin" ? undefined : engine,
+          effects: fx,
         }),
         (t) => setProgress(t)
       ).then((r) => {
@@ -475,6 +477,16 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               </span>
             )}
           </div>
+          <div style={{ display: "flex", gap: 22, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={fx} onChange={(e) => setFx(e.target.checked)}
+                style={{ accentColor: ORANGE, width: 16, height: 16 }} />
+              随机切换动效
+              <span style={{ fontSize: 11, color: MUTED, background: "#F1EDE8", padding: "2px 8px", borderRadius: 99 }}>
+                写入 PPT 放映 + 视频随机镜头
+              </span>
+            </label>
+          </div>
           <div style={{ display: "flex", gap: 10, marginTop: 20, alignItems: "center", flexWrap: "wrap" }}>
             <Btn kind="ghost" icon="arrowL" onClick={() => setStep(1)}>上一步</Btn>
             <Btn onClick={startGenerate} disabled={busy}>{busy ? "生成中…" : "开始生成"}</Btn>
@@ -596,7 +608,9 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
       </p>
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
         <Btn kind="ghost" icon="arrowL" onClick={() => goPanel("home")}>← 返回首页</Btn>
-        <Btn kind="soft" icon="refresh" onClick={genScript} disabled={busy || !slides.length}>AI 重新生成全部</Btn>
+        <Btn kind="soft" icon="refresh" onClick={genScript} disabled={busy || !slides.length}>
+          {script.some((s) => (s || "").trim()) ? "AI 重新生成全部" : "AI 生成全部解说词"}
+        </Btn>
         <Btn kind="ghost" icon="save" onClick={saveScript} disabled={busy || !script.length}>保存解说词</Btn>
         <span style={{ flex: 1 }} />
         {progress && <div style={{ width: 180 }}><Progress progress={progress} /></div>}
@@ -686,12 +700,19 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
   }
 
   async function preview() {
-    setPreviewing(true);
+    setPreviewing(true); setMsg(""); setErr(false);
     try {
       const u = `${await api.previewUrl(voice, clampSpeed(speed))}?t=${Date.now()}`;
-      const a = new Audio(u);
+      const res = await fetch(u);
+      if (!res.ok) {
+        let d = "试听合成失败";
+        try { d = (await res.json()).detail || d; } catch {}
+        throw new Error(d + "（配音需要联网使用 Edge-TTS）");
+      }
+      const blob = await res.blob();
+      const a = new Audio(URL.createObjectURL(blob));
       a.onended = () => setPreviewing(false);
-      a.onerror = () => { setPreviewing(false); setMsg("试听失败：音频加载出错，请检查网络"); setErr(true); };
+      a.onerror = () => { setPreviewing(false); setMsg("试听播放失败，请重试"); setErr(true); };
       await a.play();
     } catch (e) {
       setPreviewing(false);
@@ -783,6 +804,7 @@ function VideoPanel({ project }) {
   const [subtitle, setSubtitle] = useState(true);
   const [transition, setTransition] = useState(0.5);
   const [followFx, setFollowFx] = useState(false);
+  const [fx, setFx] = useState(true);   // 随机镜头动效（Ken Burns）
   const [progress, setProgress] = useState(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [engine, setEngine] = useState("");
@@ -805,9 +827,9 @@ function VideoPanel({ project }) {
   useEffect(() => () => clearInterval(timer.current), []);
 
   async function exportVideo() {
-    setVideoUrl(""); setMsg(""); setErr(false);
+    setVideoUrl(""); setEngine(""); setMsg(""); setErr(false);
     try {
-      const r = await api.exportVideo(project.id, { resolution, fps, subtitle, transition, follow_transition: followFx });
+      const r = await api.exportVideo(project.id, { resolution, fps, subtitle, transition, follow_transition: followFx, effects: fx });
       setProgress({ status: "running", progress: 0.02, message: "任务已提交" });
       timer.current = setInterval(() => poll(r.taskId), 2000);
     } catch (e) { setMsg("提交失败：" + e.message); setErr(true); }
@@ -836,6 +858,13 @@ function VideoPanel({ project }) {
             <input type="checkbox" checked={subtitle} onChange={(e) => setSubtitle(e.target.checked)} style={{ accentColor: ORANGE, width: 16, height: 16 }} /> 烧录字幕
           </label>
           <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={fx} onChange={(e) => setFx(e.target.checked)} style={{ accentColor: ORANGE, width: 16, height: 16 }} />
+            随机镜头动效（推荐）
+            <span style={{ fontSize: 11, color: MUTED, background: "#F1EDE8", padding: "2px 8px", borderRadius: 99 }}>
+              每页随机推近/拉远/平移
+            </span>
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
             <input type="checkbox" checked={followFx} onChange={(e) => setFollowFx(e.target.checked)} style={{ accentColor: ORANGE, width: 16, height: 16 }} />
             跟随 PPT 原始切换动效
             <span style={{ fontSize: 11, color: MUTED, background: "#F1EDE8", padding: "2px 8px", borderRadius: 99 }}>
@@ -853,13 +882,19 @@ function VideoPanel({ project }) {
         <Msg text={msg} error={err} />
       </div>
 
-      {videoUrl && (
+      {videoUrl && !running && (
         <div style={cardStyle}>
           <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>导出结果{engine ? ` · ${engine}` : ""}</h3>
           <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-            <Btn onClick={() => api.downloadFile(videoUrl, "PPTVideoStudio.mp4")}>下载 MP4</Btn>
+            <Btn onClick={async () => {
+              try {
+                await api.downloadFile(videoUrl, "PPTVideoStudio.mp4");
+                setMsg("视频已开始下载，请留意系统下载提示 ✔");
+              } catch (e) { setMsg("下载失败：" + e.message); setErr(true); }
+            }}>下载 MP4</Btn>
             <span style={{ fontSize: 12, color: MUTED }}>点击后浏览器默认下载，请留意系统下载提示</span>
           </div>
+          <Msg text={msg} error={err} />
         </div>
       )}
     </>

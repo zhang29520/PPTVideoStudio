@@ -5,10 +5,12 @@
 """
 import base64
 import io
+import random
 import re
 from pathlib import Path
 from typing import Dict, List
 
+from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
@@ -41,7 +43,27 @@ def _set_text(tf, text: str, size: int, color, bold=False, align=PP_ALIGN.LEFT):
     run.font.name = FONT
 
 
-def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = None) -> Path:
+_P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+# PowerPoint 支持的单页切换效果（p:transition 子元素）
+_TRANS_KINDS = (
+    ("fade", {}), ("push", {"dir": "l"}), ("push", {"dir": "u"}),
+    ("wipe", {"dir": "d"}), ("wipe", {"dir": "l"}),
+    ("cover", {"dir": "l"}), ("split", {}), ("pull", {"dir": "u"}),
+)
+
+
+def _add_random_transition(slide, rng: random.Random) -> None:
+    """给幻灯片注入随机切换效果（PowerPoint/WPS 放映、导出视频时可见）。"""
+    kind, attrs = rng.choice(_TRANS_KINDS)
+    tr = etree.SubElement(slide.element, f"{{{_P_NS}}}transition")
+    tr.set("spd", "med")
+    child = etree.SubElement(tr, f"{{{_P_NS}}}{kind}")
+    for k, v in attrs.items():
+        child.set(k, v)
+
+
+def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = None,
+               effects: bool = False) -> Path:
     # 主题色：用户选择的 primary + 由它派生的强调色
     primary_hex = (theme or {}).get("primary") or "1a3a5c"
     slidev = (theme or {}).get("style") == "Slidev 极客"
@@ -59,9 +81,12 @@ def build_pptx(slides: List[Dict], out_path: str | Path, theme: Dict | None = No
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H
     blank = prs.slide_layouts[6]
+    trng = random.Random("pvs-transitions")
 
     for i, s in enumerate(slides):
         slide = prs.slides.add_slide(blank)
+        if effects and i > 0:
+            _add_random_transition(slide, trng)
         title = s.get("title", "")
         bullets = s.get("bullets", []) or []
         is_cover = i == 0

@@ -21,7 +21,8 @@ def _rebuild_pptx(project: dict) -> str:
     """根据当前 slides 重建 PPTX，返回相对文件名。"""
     d = Path(store.project_dir(project["id"]))
     out = d / "output.pptx"
-    build_pptx(project["slides"], out, theme=project.get("theme"))
+    build_pptx(project["slides"], out, theme=project.get("theme"),
+               effects=bool(project.get("effects")))
     project["files"]["pptx"] = "output.pptx"
     return "output.pptx"
 
@@ -48,6 +49,7 @@ def generate_ppt(project_id: str, payload: dict = None):
     use_llm = payload.get("engine", "ai") != "builtin"
     profile_id = payload.get("profile_id") or None
     with_images = bool(payload.get("with_images", True))
+    project["effects"] = bool(payload.get("effects", False))  # 随机切换动效
 
     def job(progress):
         progress(0.05, "准备生成…")
