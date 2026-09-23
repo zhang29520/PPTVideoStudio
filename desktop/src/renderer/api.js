@@ -21,6 +21,7 @@ async function req(path, options = {}) {
     try {
       const data = await res.json();
       detail = data.detail || detail;
+      if (typeof detail !== "string") detail = JSON.stringify(detail); // 防止 "[object Object]"
     } catch {}
     throw new Error(detail);
   }
@@ -97,6 +98,10 @@ export const api = {
     req(`/api/video/export/${id}`, { method: "POST", body: JSON.stringify(cfg || {}) }),
   videoTask: (tid) => req(`/api/video/task/${tid}`),
   videoDownloadUrl: async (id) => `${await getBase()}/api/video/${id}/download`,
+
+  // 背景音乐（内置 5 种风格，可商用）
+  bgmList: () => req("/api/bgm/list"),
+  bgmFileUrl: async (styleId) => `${await getBase()}/api/bgm/${styleId}/file`,
 
   // 设置
   getSettings: () => req("/api/settings"),

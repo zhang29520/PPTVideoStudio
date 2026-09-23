@@ -48,13 +48,16 @@ def generate_tts(project_id: str, payload: dict = None):
 
 
 @router.get("/api/tts/preview")
-def tts_preview(voice: str = "", speed: float = 1.0):
-    """按当前音色+语速合成一句试听音频。"""
+def tts_preview(voice: str = "", speed: str = "1.0"):
+    """按当前音色+语速合成一句试听音频。参数全部手工解析，避免 422 校验错误。"""
     from ..services.tts import _synth_one
 
-    speed = max(0.1, min(2.0, speed))
+    try:
+        speed = max(0.1, min(2.0, float(speed)))
+    except (TypeError, ValueError):
+        speed = 1.0
     rate = speed_to_rate(speed)
-    v = voice or load_settings()["tts_voice"]
+    v = (voice or "").strip() or load_settings()["tts_voice"]
     text = "您好，这是当前语速的试听效果，生成视频时每页配音都会使用这个语速。"
     fd, path = tempfile.mkstemp(suffix=".mp3")
     Path(path).unlink(missing_ok=True)

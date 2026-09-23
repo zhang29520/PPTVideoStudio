@@ -176,37 +176,141 @@ function Thumb({ projectId, index, tick, onZoom, big, w = 150 }) {
   );
 }
 
-/* 点击放大：全屏预览某一页 */
-function ZoomModal({ projectId, index, total, onClose, onNav }) {
+/* 点击放大：全屏预览某一页（支持直接编辑该页内容与配图） */
+function ZoomModal({ projectId, index, total, onClose, onNav, slides, onSlidesSaved }) {
+  const editable = Array.isArray(slides) && !!onSlidesSaved;
+  const [url, setUrl] = useState("");
+  const [imgTick, setImgTick] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(null);   // {title, lead, bulletsText, image}
+  const [saving, setSaving] = useState(false);
+  const [editMsg, setEditMsg] = useState("");
+  const imgInputRef = useRef(null);
+  const newImgRef = useRef(null);             // 新选的配图 data URI
+
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape") onClose();
-      if (e.key === "ArrowRight" && index < total - 1) onNav(index + 1);
-      if (e.key === "ArrowLeft" && index > 0) onNav(index - 1);
+      if (e.key === "Escape") { if (!editing) onClose(); }
+      if (!editing && e.key === "ArrowRight" && index < total - 1) onNav(index + 1);
+      if (!editing && e.key === "ArrowLeft" && index > 0) onNav(index - 1);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [index, total]);
-  const [url, setUrl] = useState("");
+  }, [index, total, editing]);
   useEffect(() => {
     setUrl("");
     api.pageUrl(projectId, index).then((u) => setUrl(`${u}?t=${Date.now()}`)).catch(() => {});
-  }, [projectId, index]);
+  }, [projectId, index, imgTick]);
+
+  function startEdit() {
+    const s = slides[index] || {};
+    newImgRef.current = null;
+    setDraft({
+      title: s.title || "",
+      lead: s.lead || "",
+      bulletsText: (s.bullets || []).join("\n"),
+    });
+    setEditMsg("");
+    setEditing(true);
+  }
+
+  function pickImage(e) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    if (!/^image\//.test(f.type)) { setEditMsg("请选择图片文件"); return; }
+    const rd = new FileReader();
+    rd.onload = () => { newImgRef.current = String(rd.result); setEditMsg("已选择新配图，点击保存生效"); };
+    rd.readAsDataURL(f);
+  }
+
+  async function saveEdit() {
+    setSaving(true); setEditMsg("");
+    try {
+      const next = slides.map((s, i) => {
+        if (i !== index) return s;
+        const out = { ...s };
+        out.title = draft.title.trim();
+        if (draft.lead.trim()) out.lead = draft.lead.trim(); else delete out.lead;
+        out.bullets = draft.bulletsText.split("\n").map((x) => x.trim()).filter(Boolean);
+        if (newImgRef.current) out.image = newImgRef.current;
+        return out;
+      });
+      await api.saveSlides(projectId, next);
+      onSlidesSaved(next);
+      setEditing(false);
+      setImgTick((t) => t + 1);
+    } catch (e) {
+      setEditMsg("保存失败：" + e.message);
+    } finally { setSaving(false); }
+  }
+
+  const cur = (Array.isArray(slides) && slides[index]) || {};
+
+  if (editing && draft) {
+    return (
+      <div onClick={() => {}} style={{
+        position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,16,12,.72)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <div onClick={(e) => e.stopPropagation()} style={{
+          background: "#fff", borderRadius: 14, padding: "22px 26px", width: "min(860px, 92vw)",
+          maxHeight: "88vh", overflow: "auto", boxShadow: "0 24px 80px rgba(0,0,0,.4)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+            <h3 style={{ margin: 0, fontSize: 16 }}>编辑第 {index + 1} 页</h3>
+            <span style={{ flex: 1 }} />
+            <button onClick={() => setEditing(false)} style={{ border: "none", background: "transparent", fontSize: 20, cursor: "pointer", color: MUTED }}>✕</button>
+          </div>
+          <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 12 }}>
+            保存后自动重建 PPT 与本页画面；解说词面板可继续微调本页讲稿
+          </div>
+          <div style={{ ...labelStyle, marginTop: 0 }}>页面标题</div>
+          <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} style={inputStyle} />
+          <div style={labelStyle}>导语（可选，显示在标题下方）</div>
+          <input value={draft.lead} onChange={(e) => setDraft({ ...draft, lead: e.target.value })} style={inputStyle}
+            placeholder="一句话概括本页（可留空）" />
+          <div style={labelStyle}>要点（每行一条，推荐格式「关键词：描述」）</div>
+          <textarea value={draft.bulletsText} onChange={(e) => setDraft({ ...draft, bulletsText: e.target.value })}
+            rows={7} style={{ ...inputStyle, resize: "vertical", lineHeight: 1.7 }} />
+          <div style={labelStyle}>配图（可选：上传你自己的图片，商用零风险）</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <FileBtn icon="upload" accept="image/*" onFile={pickImage}>上传本页配图</FileBtn>
+            {cur.image && <span style={{ fontSize: 12, color: MUTED }}>当前已有配图，不上传则保留原图</span>}
+          </div>
+          {editMsg && <div style={{ marginTop: 10, fontSize: 12.5, color: editMsg.startsWith("保存失败") ? "#C0392B" : "#1a7f37" }}>{editMsg}</div>}
+          <div style={{ display: "flex", gap: 10, marginTop: 18, justifyContent: "flex-end" }}>
+            <Btn kind="ghost" onClick={() => setEditing(false)}>取消</Btn>
+            <Btn onClick={saveEdit} disabled={saving || !draft.title.trim()}>{saving ? "保存中…" : "保存并重建本页"}</Btn>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,16,12,.72)",
       display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 14,
     }}>
       <div style={{ color: "#EDE7DF", fontSize: 13 }}>第 {index + 1} / {total} 页 · 点击任意处或按 Esc 关闭 · ←→ 切页</div>
-      <div style={{
+      <div onClick={(e) => e.stopPropagation()} style={{
         background: "#fff", borderRadius: 14, padding: 10, maxWidth: "82vw", boxShadow: "0 24px 80px rgba(0,0,0,.4)",
+        position: "relative",
       }}>
         {url ? (
-          <img src={url} style={{ maxWidth: "80vw", maxHeight: "76vh", display: "block", borderRadius: 8 }} alt={`第${index + 1}页`} />
+          <img src={url} style={{ maxWidth: "80vw", maxHeight: "72vh", display: "block", borderRadius: 8 }} alt={`第${index + 1}页`} />
         ) : (
           <div style={{ width: 640, height: 360, display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontSize: 14 }}>
             加载中…
           </div>
+        )}
+        {editable && url && (
+          <button onClick={startEdit} style={{
+            position: "absolute", right: 20, bottom: 20, border: "none", borderRadius: 9,
+            background: "rgba(30,26,20,.78)", color: "#fff", fontSize: 13, fontWeight: 600,
+            padding: "9px 16px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6,
+          }}>✎ 编辑此页</button>
         )}
       </div>
       {index > 0 && (
@@ -481,7 +585,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
           <div style={labelStyle}>AI 引擎</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <Seg
-              options={[["builtin", "内置 AI（免费·免配置）"], ...aiList.map((p) => [p.id, `${p.name} · ${p.model}`])]}
+              options={[["builtin", "内置 AI（免费·免配置）"], ...aiList.map((p) => [p.id, p.name || p.model])]}
               value={engine}
               onChange={setEngine}
             />
@@ -543,6 +647,8 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               projectId={project?.id}
               index={zoomIdx}
               total={slides.length}
+              slides={slides}
+              onSlidesSaved={(next) => { setSlides(next); setThumbTick((t) => t + 1); }}
               onClose={() => setZoomIdx(-1)}
               onNav={(i) => setZoomIdx(i)}
             />
@@ -744,22 +850,22 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
   async function preview() {
     setPreviewing(true); setMsg(""); setErr(false);
     try {
+      // 直接用 <audio> 元素加载（与缩略图 <img> 同一网络通道，稳定可达），
+      // 不走 fetch —— fetch 在部分代理环境下会被拦截
       const u = `${await api.previewUrl(voice, clampSpeed(speed))}?t=${Date.now()}`;
-      const res = await fetch(u);
-      if (!res.ok) {
-        let d = "试听合成失败";
-        try { d = (await res.json()).detail || d; } catch {}
-        throw new Error(d + "（配音需要联网使用 Edge-TTS）");
-      }
-      const blob = await res.blob();
-      const a = new Audio(URL.createObjectURL(blob));
-      a.onended = () => setPreviewing(false);
-      a.onerror = () => { setPreviewing(false); setMsg("试听播放失败，请重试"); setErr(true); };
-      await a.play();
+      await new Promise((resolve, reject) => {
+        const a = new Audio(u);
+        const to = setTimeout(() => { a.src = ""; reject(new Error("试听超时，请检查网络后重试")); }, 20000);
+        a.onended = () => { clearTimeout(to); resolve(); };
+        a.onerror = () => { clearTimeout(to); reject(new Error("试听播放失败，请重试（配音需要联网使用 Edge-TTS）")); };
+        a.play().catch(() => { clearTimeout(to); reject(new Error("播放被拦截，请重试")); });
+      });
     } catch (e) {
-      setPreviewing(false);
-      setMsg("试听失败：" + (e.message || "请检查网络"));
+      const m = typeof e?.message === "string" && e.message ? e.message : "请检查网络";
+      setMsg("试听失败：" + m);
       setErr(true);
+    } finally {
+      setPreviewing(false);
     }
   }
 
@@ -852,6 +958,30 @@ function VideoPanel({ project, goPanel }) {
   const [followFx, setFollowFx] = useState(false);
   const [fx, setFx] = useState(true);   // 随机镜头动效（Ken Burns）
   const [bgm, setBgm] = useState(true); // 内置背景音乐
+  const [bgmStyle, setBgmStyle] = useState("calm");
+  const [bgmStyles, setBgmStyles] = useState([]);
+  const [previewBgm, setPreviewBgm] = useState(null); // 正在试听的风格 id
+  const bgmAudio = useRef(null);
+
+  useEffect(() => {
+    api.bgmList().then((d) => setBgmStyles((d.styles || []).filter((s) => s.exists))).catch(() => {});
+    return () => { if (bgmAudio.current) bgmAudio.current.src = ""; };
+  }, []);
+
+  function previewBgmStyle() {
+    if (bgmAudio.current) { bgmAudio.current.src = ""; bgmAudio.current = null; }
+    if (previewBgm) { setPreviewBgm(null); return; }
+    api.bgmFileUrl(bgmStyle).then((u) => {
+      const a = new Audio(u);
+      a.onended = () => setPreviewBgm(null);
+      a.onerror = () => setPreviewBgm(null);
+      bgmAudio.current = a;
+      setPreviewBgm(bgmStyle);
+      a.play().catch(() => setPreviewBgm(null));
+    }).catch(() => {});
+  }
+
+  const bgmName = (bgmStyles.find((s) => s.id === bgmStyle) || {}).name || "舒缓";
   const [progress, setProgress] = useState(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [engine, setEngine] = useState("");
@@ -862,13 +992,19 @@ function VideoPanel({ project, goPanel }) {
   async function poll(tid) {
     try {
       const t = await api.task(tid);
-      setProgress(t);
       if (t.status === "done") {
+        setProgress(null);
         setVideoUrl(await api.videoDownloadUrl(project.id));
         setEngine(t.result?.engine || "");
+        setMsg("视频合成完成 ✔ 点击下方下载");
         clearInterval(timer.current);
+      } else if (t.status === "error") {
+        setProgress(null);
+        setMsg("合成失败：" + t.error); setErr(true);
+        clearInterval(timer.current);
+      } else {
+        setProgress(t);
       }
-      if (t.status === "error") { setMsg("合成失败：" + t.error); setErr(true); clearInterval(timer.current); }
     } catch (e) { clearInterval(timer.current); setMsg("查询失败：" + e.message); setErr(true); }
   }
   useEffect(() => () => clearInterval(timer.current), []);
@@ -876,7 +1012,7 @@ function VideoPanel({ project, goPanel }) {
   async function exportVideo() {
     setVideoUrl(""); setEngine(""); setMsg(""); setErr(false);
     try {
-      const r = await api.exportVideo(project.id, { resolution, fps, subtitle, transition, follow_transition: followFx, effects: fx, bgm });
+      const r = await api.exportVideo(project.id, { resolution, fps, subtitle, transition, follow_transition: followFx, effects: fx, bgm, bgm_style: bgmStyle });
       setProgress({ status: "running", progress: 0.02, message: "任务已提交" });
       timer.current = setInterval(() => poll(r.taskId), 2000);
     } catch (e) { setMsg("提交失败：" + e.message); setErr(true); }
@@ -912,9 +1048,26 @@ function VideoPanel({ project, goPanel }) {
             <input type="checkbox" checked={bgm} onChange={(e) => setBgm(e.target.checked)} style={{ accentColor: ORANGE, width: 16, height: 16 }} />
             背景音乐（推荐）
             <span style={{ fontSize: 11, color: MUTED, background: "#F1EDE8", padding: "2px 8px", borderRadius: 99 }}>
-              内置轻音乐 · 可商用 · 自动压低音量不抢解说
+              内置 5 风格 · 可商用 · 自动压低音量不抢解说
             </span>
           </label>
+          {bgm && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+              <Seg
+                options={(bgmStyles.length ? bgmStyles.map((s) => [s.id, s.name]) : [["calm", "舒缓"]])}
+                value={bgmStyle}
+                onChange={setBgmStyle}
+              />
+              <button onClick={previewBgmStyle}
+                style={{
+                  border: `1px solid ${previewBgm ? ORANGE : LINE}`, borderRadius: 8,
+                  background: previewBgm ? ORANGE_SOFT : "#fff", color: previewBgm ? ORANGE : INK,
+                  fontSize: 12, padding: "5px 12px", cursor: "pointer", fontWeight: 600,
+                }}>
+                {previewBgm ? "◼ 停止试听" : `🔊 试听《${bgmName}》`}
+              </button>
+            </div>
+          )}
           <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
             <input type="checkbox" checked={fx} onChange={(e) => setFx(e.target.checked)} style={{ accentColor: ORANGE, width: 16, height: 16 }} />
             随机镜头动效（推荐）

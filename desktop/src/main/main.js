@@ -269,12 +269,9 @@ ipcMain.handle("app:openExternal", (_e, url) => {
 let updateCache = null;
 app.whenReady().then(async () => {
   // 关键：本机若开了系统代理（127.0.0.1），会把对本地后端的请求也拦成 502，
-  // 导致试听/缩略图/接口全部失败。强制本地地址直连。
+  // 导致试听/缩略图/接口全部失败。渲染进程只需要访问本地后端，直接禁用代理。
   try {
-    await session.defaultSession.setProxy({
-      mode: "system",
-      proxyBypassRules: "localhost,127.0.0.1,<local>",
-    });
+    await session.defaultSession.setProxy({ mode: "direct" });
   } catch {}
   createWindow();
   startBackend();

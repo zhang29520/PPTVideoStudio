@@ -52,6 +52,7 @@ def export_video(project_id: str, payload: dict = None):
             theme=project.get("theme"),
             effects=bool(payload.get("effects", project.get("effects", False))),
             bgm=bool(payload.get("bgm", True)),
+            bgm_style=str(payload.get("bgm_style") or "calm"),
         )
         project["files"]["video"] = Path(result["video_path"]).name
         project["files"]["srt"] = Path(result["srt_path"]).name
@@ -69,6 +70,32 @@ def export_video(project_id: str, payload: dict = None):
 @router.get("/api/video/task/{task_id}")
 def video_task(task_id: str):
     return tasks.get(task_id)
+
+
+@router.get("/api/bgm/list")
+def bgm_list():
+    """内置背景音乐风格列表（全部为本项目程序化生成，可商用）。"""
+    from ..services.video import BGM_STYLES, ASSETS_DIR
+
+    out = []
+    for key, (name, fname) in BGM_STYLES.items():
+        out.append({"id": key, "name": name,
+                    "file": f"/api/bgm/{key}/file",
+                    "exists": (ASSETS_DIR / fname).exists()})
+    return {"styles": out}
+
+
+@router.get("/api/bgm/{style_id}/file")
+def bgm_file(style_id: str):
+    from ..services.video import BGM_STYLES, ASSETS_DIR
+
+    item = BGM_STYLES.get(style_id)
+    if not item:
+        raise HTTPException(404, "风格不存在")
+    path = ASSETS_DIR / item[1]
+    if not path.exists():
+        raise HTTPException(404, "音乐文件缺失")
+    return FileResponse(path, media_type="audio/mpeg", filename=path.name)
 
 
 @router.get("/api/video/{project_id}/download")

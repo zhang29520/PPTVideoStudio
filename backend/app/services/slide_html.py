@@ -366,10 +366,11 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets,
     elif layout == "imgtop":
         rows = "".join(_pt_card(j, p) for j, p in enumerate(pts))
         cols2 = " cols2" if len(pts) >= 4 else ""
+        img_h = 230 if len(pts) >= 4 else 300
         body = f"""
       <div class="content-inner imgtop">
         {head}
-        <div class="top-img"><img src="{image}" alt=""></div>
+        <div class="top-img" style="height:{img_h}px"><img src="{image}" alt=""></div>
         <div class="grid{cols2}">{rows}</div>
       </div>"""
     elif layout == "stats":
@@ -451,6 +452,14 @@ def build_slides_html(slides: List[Dict], theme: Dict | None) -> str:
 <html><head><meta charset="utf-8"><style>
 *{{margin:0;padding:0;box-sizing:border-box;}}
 body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};background:#000;}}
+/* ---------- 全局防溢出：长词/URL 强制断行 + 行数截断（文字超出是大忌） ---------- */
+.slide-title,.lead,.pk,.pv,.card-t,.pc .pk,.pc .pv,.stat .n,.stat .k,.stat .v,
+.chip,.cover-title,.thanks,.foot{{overflow-wrap:anywhere;word-break:break-word;}}
+.card-t,.pc .pv,.stat .v{{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;}}
+.pc .pv,.txt-col .card-t{{-webkit-line-clamp:3;}}
+.lead{{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}}
+.slide-title{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+.grid,.g2,.stats{{overflow:hidden;min-height:0;}}
 .slide{{position:absolute;inset:0;display:none;flex-direction:column;}}
 .slide.active{{display:flex;}}
 /* ---------- 封面 / 结尾 ---------- */

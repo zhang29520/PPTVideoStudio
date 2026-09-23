@@ -1,10 +1,14 @@
-"""自动配图服务：Bing 图片搜索（免 API key）→ 下载 → 压缩 → data URI。
+"""自动配图服务：只使用免费可商用图源 → 下载 → 压缩 → data URI。
 
+版权策略（避免商用版权纠纷）：
+1. Openverse（license=cc0,pdm，仅公有领域/CC0 授权）
+2. Wikimedia Commons（仅 CC0 / Public domain 授权，逐图校验许可元数据）
+3. 本地程序化生成的主题色抽象艺术图（本项目自有版权，零风险兜底）
+
+不再使用 360/Bing 等搜索引擎抓图——那些图绝大多数不可商用。
 每页幻灯片根据「主题核心词 + 页标题」搜索配图，下载成功后转成
-data:image/jpeg;base64 直接内嵌进 slide["image"]，随项目 JSON 持久化，
-HTML 渲染引擎与 PPTX 构建器都能直接使用，无需额外文件管理。
-
-任何失败都静默跳过（该页退回纯文字排版），绝不阻塞 PPT 生成。
+data:image/jpeg;base64 直接内嵌进 slide["image"]，随项目 JSON 持久化。
+任何失败都静默跳过，绝不阻塞 PPT 生成。
 """
 import base64
 import hashlib
@@ -18,8 +22,6 @@ from PIL import Image, ImageDraw
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/126.0 Safari/537.36")
-
-IMAGE_SEARCH_URL = "https://cn.bing.com/images/search?q={q}&first=1&count=30"
 
 # 抓取图片的尺寸/体积限制
 MIN_W, MIN_H = 480, 270
@@ -85,61 +87,72 @@ def _clean_title(s: str) -> str:
     return _html.unescape(s).strip()
 
 
-def _search_360(query: str, limit: int = 24) -> list:
-    """360 图片 JSON 接口（国内可达、稳定、免 key），返回 [(url, title)]。"""
-    u = ("https://image.so.com/j?q=" + urllib.parse.quote(query)
-         + "&src=srp&correct=&pn=30&sn=0")
+def _search_openverse(query: str, limit: int = 20) -> list:
+    """Openverse（openverse.org 聚合检索）：只取 CC0 / 公有领域授权图。返回 [(url, title)]。"""
+    u = ("https://api.openverse.org/v1/images/?q=" + urllib.parse.quote(query)
+         + "&license=cc0,pdm&page_size=" + str(limit))
     try:
-        req = urllib.request.Request(u, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=8) as r:
+        req = urllib.request.Request(u, headers={"User-Agent": UA, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
             d = json.loads(r.read().decode("utf-8", "ignore"))
     except Exception:
         return []
     out = []
-    for item in d.get("list", []):
-        url = item.get("img") or ""
+    for item in d.get("results", []):
+        url = item.get("url") or ""
         if not url.startswith("http"):
             continue
         w, h = item.get("width") or 0, item.get("height") or 0
         if w and h and (w < MIN_W or h < MIN_H):
-            continue  # 尺寸预筛，省一次下载
+            continue
         out.append((url, _clean_title(item.get("title") or "")))
         if len(out) >= limit:
             break
     return out
 
 
-def _search_bing(query: str, limit: int = 24) -> list:
-    """Bing 图片搜索备用图源，返回 [(url, title)]。"""
+_OPENVERSE_OK = ("cc0", "pdm")
+
+
+def _search_commons(query: str, limit: int = 20) -> list:
+    """Wikimedia Commons：逐图校验许可元数据，只保留 CC0 / Public domain。返回 [(url, title)]。"""
+    u = ("https://commons.wikimedia.org/w/api.php?action=query&generator=search"
+         "&gsrsearch=" + urllib.parse.quote("filetype:bitmap " + query)
+         + "&gsrnamespace=6&gsrlimit=" + str(limit)
+         + "&prop=imageinfo&iiprop=url|size|extmetadata&format=json")
     try:
-        page = _fetch(IMAGE_SEARCH_URL.format(q=urllib.parse.quote(query)))
+        req = urllib.request.Request(u, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read().decode("utf-8", "ignore"))
     except Exception:
         return []
-    results = []
-    for blk in page.split('class="iusc"')[1:]:
-        mu = re.search(r'murl&quot;:&quot;(.*?)&quot;', blk)
-        if not mu:
-            mu = re.search(r'"murl":"(.*?)"', blk)
-            if not mu:
-                continue
-            url = mu.group(1)
-            tm = re.search(r'"t":"(.*?)"', blk)
-        else:
-            url = mu.group(1)
-            tm = re.search(r'&quot;t&quot;:&quot;(.*?)&quot;', blk)
-        url = _unescape_json(url)
-        if not url.startswith("http") or "." not in url:
+    out = []
+    for page in (d.get("query", {}).get("pages") or {}).values():
+        infos = page.get("imageinfo") or []
+        if not infos:
             continue
-        title = _unescape_json(tm.group(1)) if tm else ""
-        results.append((url, title))
-        if len(results) >= limit:
+        info = infos[0]
+        w, h = info.get("width") or 0, info.get("height") or 0
+        if w < MIN_W or h < MIN_H:
+            continue
+        meta = info.get("extmetadata") or {}
+        lic = (meta.get("LicenseShortName") or {}).get("value", "") or ""
+        lic_l = lic.lower()
+        if not ("cc0" in lic_l or "public domain" in lic_l or "pd" == lic_l.strip()):
+            continue
+        url = info.get("url") or ""
+        if not url.startswith("http"):
+            continue
+        title = _clean_title(page.get("title") or "").replace("File:", "")
+        out.append((url, title))
+        if len(out) >= limit:
             break
-    return results
+    return out
 
 
 def _search_images(query: str) -> list:
-    """多引擎图源：360 优先，Bing 兜底；返回首个有结果的引擎候选。"""
-    for fn in (_search_360, _search_bing):
+    """免费可商用图源：Openverse(CC0/PDM) 优先，Wikimedia Commons 兜底。"""
+    for fn in (_search_openverse, _search_commons):
         try:
             res = fn(query)
         except Exception:
@@ -309,78 +322,65 @@ def attach_images(topic: str, slides: list, progress=None, per_page_timeout: flo
                   primary: str = "#1a3a5c") -> int:
     """为主题幻灯片逐页配图，写入 slide["image"]=data URI。返回成功页数。
 
-    - 封面用主题核心词搜大图（做全幅背景）
-    - 内容页用「核心词+页标题」搜索
-    - 跨页去重（同一张图不会重复使用）
-    - 搜索失败的页用本地生成的主题色抽象艺术图兜底，页面永不裸奔
+    版权安全：只用 Openverse(CC0/PDM) 与 Wikimedia Commons(PD/CC0) 图源。
+    策略：每次生成只做 1~2 次主题级搜索（API 限流友好），结果进候选池，
+    按页标题相关度分配；分配不到相关图的页用本地抽象艺术图兜底，页面永不裸奔。
     """
     rep = progress or (lambda stage, ratio: None)
     if not slides:
         return 0
 
     used_hashes: set = set()
-    pool: list = []  # 本次运行抓到的全部候选 (url, title)，供最后兜底复用
+    core = _TOPIC_SUFFIX.sub("", topic).strip() or topic
     topic_strong, topic_weak = _query_keywords(topic)
+
+    # 1. 主题级搜索（1~2 次请求，规避 Openverse 匿名限流）
+    rep(0.88, "正在检索免费可商用配图…")
+    pool: list = []
+    for q in [core, topic if topic != core else None]:
+        if not q or len(pool) >= 14:
+            continue
+        res = _search_images_cached(q)
+        pool.extend(res)
+    pool = list(dict.fromkeys(pool))  # 去重保序
+
     ok = 0
     total = len(slides)
+
+    def _try_pick(strong, weak, relaxed_seq=(False, True)):
+        """从候选池挑一张相关且未用过的图，下载压缩成功后返回 data URI。"""
+        for relaxed in relaxed_seq:
+            for u, t in pool:
+                if not _title_relevant(t, strong, weak, relaxed=relaxed):
+                    continue
+                data = _download(u)
+                if not data:
+                    continue
+                digest = hashlib.md5(data).hexdigest()
+                if digest in used_hashes:
+                    continue
+                uri = _compress(data)
+                if not uri:
+                    continue
+                used_hashes.add(digest)
+                return uri
+        return None
 
     for i, s in enumerate(slides):
         if not isinstance(s, dict):
             continue
         rep(0.88 + 0.05 * i / max(1, total), f"正在为第 {i + 1}/{total} 页配图…")
-        queries = _slide_query(topic, s.get("title", ""))
-        got = None
-        for q in queries[:3]:  # 每页最多 3 个搜索词
-            res = _search_images_cached(q)
-            pool.extend((u, t) for u, t in res)
-            strong, weak = _query_keywords(q)
-            # 两轮过滤：先严格（弱词需 2 命中），不够再放宽（弱词 1 命中）
-            for relaxed in (False, True):
-                for u, t in res:
-                    if not _title_relevant(t, strong, weak, relaxed=relaxed):
-                        continue
-                    data = _download(u)
-                    if not data:
-                        continue
-                    digest = hashlib.md5(data).hexdigest()
-                    if digest in used_hashes:
-                        continue
-                    uri = _compress(data)
-                    if not uri:
-                        continue
-                    used_hashes.add(digest)
-                    got = uri
-                    break
-                if got:
-                    break
-            if got:
-                break
-        if got:
-            s["image"] = got
-            ok += 1
-
-    # 终轮兜底：没配到图的页从本主题候选池里挑未使用的相关图（不发新搜索请求）
-    for i, s in enumerate(slides):
-        if not isinstance(s, dict) or s.get("image"):
-            continue
-        for u, t in pool:
-            if not _title_relevant(t, topic_strong, topic_weak, relaxed=True):
-                continue
-            data = _download(u)
-            if not data:
-                continue
-            digest = hashlib.md5(data).hexdigest()
-            if digest in used_hashes:
-                continue
-            uri = _compress(data)
-            if not uri:
-                continue
-            used_hashes.add(digest)
+        t = re.sub(r"^\d+[\.、]\s*", "", s.get("title", "") or "").strip()
+        strong, weak = _query_keywords(f"{core} {t}")
+        uri = _try_pick(strong, weak)
+        if not uri:
+            # 放宽到纯主题相关度再试一次
+            uri = _try_pick(topic_strong, topic_weak, relaxed_seq=(True,))
+        if uri:
             s["image"] = uri
             ok += 1
-            break
 
-    # 最终兜底：本地生成主题色抽象艺术图（零网络依赖，封面必配）
+    # 最终兜底：本地生成主题色抽象艺术图（自有版权，零风险，封面必配）
     for i, s in enumerate(slides):
         if not isinstance(s, dict) or s.get("image"):
             continue

@@ -18,7 +18,15 @@ from .render import render_slides
 RES_MAP = {"720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)}
 
 # 内置可商用背景音乐（本项目程序化生成，无第三方版权）
-BGM_PATH = Path(__file__).resolve().parent.parent / "assets" / "bgm_calm.mp3"
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+BGM_STYLES = {
+    "calm": ("舒缓", "bgm_calm.mp3"),
+    "gentle": ("温柔", "bgm_gentle.mp3"),
+    "light": ("轻快", "bgm_light.mp3"),
+    "epic": ("大气磅礴", "bgm_epic.mp3"),
+    "energetic": ("活力", "bgm_energetic.mp3"),
+}
+BGM_PATH = ASSETS_DIR / "bgm_calm.mp3"
 
 
 def _run(cmd: List[str], timeout: int = 300) -> bool:
@@ -96,6 +104,7 @@ def compose_video(
     theme: dict | None = None,
     effects: bool = False,
     bgm: bool = True,
+    bgm_style: str = "calm",
 ) -> Dict:
     """合成最终 MP4。返回 {video_path, srt_path, duration, pages, engine}。
 
@@ -197,13 +206,15 @@ def compose_video(
 
     # 5. 背景音乐（可选）：整片铺一层轻音乐，音量压低不抢解说，结尾淡出
     total_dur = sum(padded)
-    if bgm and BGM_PATH.exists():
+    bgm_file = BGM_STYLES.get(bgm_style, ("", "bgm_calm.mp3"))[1] if bgm_style else ""
+    bgm_path = ASSETS_DIR / bgm_file if bgm_file else None
+    if bgm and bgm_path and bgm_path.exists():
         rep(0.86, "正在混入背景音乐…")
         fade_st = max(0.0, total_dur - 2.5)
         bgm_mixed = tmp / "bgm_mixed.mp4"
         ok = _run([
             "ffmpeg", "-y", "-i", str(merged),
-            "-stream_loop", "-1", "-i", str(BGM_PATH),
+            "-stream_loop", "-1", "-i", str(bgm_path),
             "-filter_complex",
             (f"[1:a]volume=0.16,afade=t=out:st={fade_st:.2f}:d=2.5[bg];"
              f"[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0[a]"),
