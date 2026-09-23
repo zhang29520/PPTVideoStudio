@@ -62,10 +62,9 @@ async function waitForHealth(port, timeoutMs) {
 }
 
 async function startBackend(attempt = 1) {
-  if (backendProc) {
-    try { backendProc.kill(); } catch {}
-    backendProc = null;
-  }
+  if (restarting) return;
+  killSpawnedBackends();
+  backendProc = null;
   const port = await pickFreePort();
   const env = childEnv(port);
   const logFile = path.join(logDir(), `backend-${Date.now()}.log`);
@@ -87,7 +86,8 @@ async function startBackend(attempt = 1) {
     args = ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port)];
     opts = { cwd: backendDir, env, stdio: ["ignore", logStream, logStream] };
   } else {
-    const backendExe = path.join(process.resourcesPath, "pvs-backend", "pvs-backend.exe");
+    const backendName = process.platform === "win32" ? "pvs-backend.exe" : "pvs-backend";
+    const backendExe = path.join(process.resourcesPath, "pvs-backend", backendName);
     if (!fs.existsSync(backendExe)) {
       backendState.error = "后端程序缺失：" + backendExe;
       return;
@@ -98,16 +98,23 @@ async function startBackend(attempt = 1) {
   }
 
   backendProc = spawn(cmd, args, opts);
+  spawnedBackends.add(backendProc);
   backendProc.on("error", (err) => {
     fs.writeSync(logStream, `[spawn error] ${err.message}\n`);
     backendState.error = "后端启动失败：" + err.message;
   });
   backendProc.on("exit", (code) => {
+    spawnedBackends.delete(backendProc);
     fs.writeSync(logStream, `[exit] code=${code}\n`);
     if (!backendState.ready) {
       backendState.error = `后端进程退出（code=${code}），详见日志`;
     }
     backendProc = null;
+    // 意外退出自动重启（应用退出时 quitting 已置位，跳过）
+    if (app.isReady() && !quitting) {
+      backendState.ready = false;
+      restartBackend(`process exited code=${code}`);
+    }
   });
 
   const ok = await waitForHealth(port, 60000);
@@ -273,9 +280,26 @@ app.whenReady().then(async () => {
   try {
     await session.defaultSession.setProxy({ mode: "direct" });
   } catch {}
+  // 应用内下载：拦截 <a download> 触发的下载，直接存到系统「下载」文件夹（极简，不弹对话框）
+  session.defaultSession.on("will-download", (_e, item) => {
+    try {
+      const name = item.getFilename() || `PPTVideoStudio-${Date.now()}.mp4`;
+      item.setSavePath(path.join(app.getPath("downloads"), name));
+      item.once("done", (_ev, state) => {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send("app:download-done", {
+            name,
+            ok: state === "completed",
+            path: item.getSavePath(),
+          });
+        }
+      });
+    } catch {}
+  });
   createWindow();
   startBackend();
   startRenderWorker();
+  startBackendWatchdog();
   updateCache = await checkUpdate();
 });
 ipcMain.handle("app:updateInfo", () => updateCache || checkUpdate());
@@ -284,6 +308,51 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
+/* ---------- 后端自愈：进程退出或健康检查连续失败时自动重启 ---------- */
+let restarting = false;
+let restartCount = 0;
+let quitting = false;
+app.on("before-quit", () => { quitting = true; });
+const spawnedBackends = new Set(); // 所有 spawn 过的后端进程，重启时统一清杀，防孤儿
+
+function killSpawnedBackends() {
+  for (const p of spawnedBackends) {
+    try { if (!p.killed) p.kill(); } catch {}
+  }
+  spawnedBackends.clear();
+}
+
+function restartBackend(reason) {
+  if (restarting || quitting) return;
+  restarting = true;
+  restartCount += 1;
+  if (restartCount > 8) return; // 防止无限重启
+  killSpawnedBackends();
+  backendProc = null;
+  backendState.ready = false;
+  console.log(`[watchdog] backend restart (#${restartCount}): ${reason}`);
+  setTimeout(() => {
+    restarting = false;
+    if (!quitting) startBackend();
+  }, 2500);
+}
+
+function startBackendWatchdog() {
+  let fails = 0;
+  setInterval(async () => {
+    // 仅在后端完全就绪后监视；启动窗口内（ready=false）不判失败，避免误杀启动慢的实例
+    if (restarting || quitting || !backendProc || !backendState.ready) return;
+    try {
+      const res = await fetch(`http://127.0.0.1:${backendState.port}/health`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) { fails = 0; return; }
+      fails += 1;
+    } catch { fails += 1; }
+    if (fails >= 3) { fails = 0; restartBackend("health check failed 3 times"); }
+  }, 10000);
+}
+
 app.on("quit", () => {
-  if (backendProc && !backendProc.killed) backendProc.kill();
+  killSpawnedBackends();
 });

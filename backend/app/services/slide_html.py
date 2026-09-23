@@ -49,19 +49,31 @@ _FONT_STACK = (
 
 _KV_RE = re.compile(r"([^，,。：:|]{2,8})[：:|]\s*(.+)", re.S)
 _KV_SOFT_RE = re.compile(r"([^，,]{2,6})[，,]\s*(.+)", re.S)
+# 清除条目自带的序号/圆点前缀（避免与版式里的 01/02/03 编号重复）
+_ENUM_RE = re.compile(r"^[•·▪◦◦\-\—\*]+\s*")
+_ENUM_NUM_RE = re.compile(
+    r"^[（(]?[0-9０-９一二三四五六七八九十]{1,3}[）)]?\s*[、．。，,：:]\s*|^[0-9]{1,2}\.\s+")
+
+
+def _clean_enum(s: str) -> str:
+    """去掉条目开头的序号/圆点前缀（1、 (2) 三、 • - 等）。"""
+    s = _ENUM_RE.sub("", s)
+    s = _ENUM_NUM_RE.sub("", s)
+    return s.strip()
 
 
 def split_point(b) -> Dict:
     """要点字符串 → {k, v}；已是 dict 直接规范化。"""
     if isinstance(b, dict):
         return {"k": str(b.get("k", "")).strip(), "v": str(b.get("v", "")).strip()}
-    s = str(b).strip()
+    s = _clean_enum(str(b).strip())
     m = _KV_RE.match(s)
     if m:
-        return {"k": m.group(1).strip(), "v": m.group(2).strip()}
+        # 描述里可能还带「1、」序号（LLM/模板常见），一并清掉
+        return {"k": m.group(1).strip(), "v": _clean_enum(m.group(2))}
     m = _KV_SOFT_RE.match(s)
     if m:
-        return {"k": m.group(1).strip(), "v": m.group(2).strip()}
+        return {"k": m.group(1).strip(), "v": _clean_enum(m.group(2))}
     return {"k": "", "v": s}
 
 
@@ -74,20 +86,28 @@ _NUM_RE = re.compile(r"\d+\.?\d*\s*(?:%|％|亿|万|千|倍|[xX×]|美元|元|�
 
 
 def _pick_layout(pts: List[Dict], image: str | None, idx: int = 1) -> str:
-    """版式自动选择：数据强调 / 左文右图 / 左图右文 / 上图下卡 / 2×2 卡片 / 列表。
-    有配图时三种图文版式按页序轮换，避免整份 PPT 清一色左字右图。"""
+    """版式自动选择：数据强调 / 左文右图 / 左图右文 / 上图下卡 / 2×2 卡片 / 列表 /
+    双栏(观点+要点) / 时间轴 / 大字观点。
+    纯文字页按页序在多种版式间轮换，保证相邻页版面不同；
+    无合适配图时走纯文字排版（不是抽象色块图）。"""
     if not pts:
         return "list"
     n_num = sum(1 for p in pts if _NUM_RE.search(p["v"]) or _NUM_RE.search(p["k"]))
     if n_num >= 2 and len(pts) <= 4:
-        return "stats"
+        # 数据多的页也在 stats / 双栏 / 2×2 间轮换，避免整份数据页一个模子
+        return ("stats", "twocol", "grid", "stats")[idx % 4]
     if image:
         if len(pts) >= 5:
             return "grid"
         return ("split", "splitrev", "imgtop")[idx % 3]
-    if len(pts) >= 4:
-        return "grid"
-    return "list"
+    # 纯文字版式池
+    if len(pts) >= 5:
+        return ("grid", "timeline", "list", "grid")[idx % 4]
+    if len(pts) == 4:
+        return ("twocol", "grid", "timeline", "list")[idx % 4]
+    if len(pts) == 3:
+        return ("list", "twocol", "feature", "timeline")[idx % 4]
+    return ("feature", "list")[idx % 2]
 
 
 # ---------- 每种风格的差异 CSS（primary 由变量注入） ----------
@@ -344,10 +364,21 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets,
         </div>"""
 
     lead_html = f'<div class="lead">{html.escape(lead)}</div>' if lead else ""
-    head = (f'<div class="slide-title">{html.escape(title)}</div>'
+    # 标题+导语+横条包进一个块：任何网格版式里都作为整体跨全宽，
+    # 杜绝「标题/导语被网格拆列挤压遮挡」
+    head = (f'<div class="head-group">'
+            f'<div class="slide-title">{html.escape(title)}</div>'
             f'{lead_html}'
-            f'<div class="head-bar"></div>')
+            f'<div class="head-bar"></div></div>')
     layout = _pick_layout(pts, image, idx)
+
+    # 密度分级：按要点文字总量收缩字号与间距，内容再多也不裁切、不遮挡
+    txt_len = sum(len(p["k"]) + len(p["v"]) for p in pts)
+    dens = ""
+    if txt_len > 430 or len(pts) >= 6:
+        dens = " xdense"
+    elif txt_len > 270 or len(pts) >= 5:
+        dens = " dense"
 
     if layout in ("split", "splitrev"):
         rows = "".join(_pt_card(j, p) for j, p in enumerate(pts))
@@ -357,7 +388,7 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets,
         img_last = ("" if layout == "splitrev"
                     else f'<div class="img-wrap"><img src="{image}" alt=""></div>')
         body = f"""
-      <div class="content-inner with-img{rev_cls}">
+      <div class="content-inner with-img{rev_cls}{dens}">
         {head}
         {img_first}
         <div class="txt-col"><div class="grid">{rows}</div></div>
@@ -366,9 +397,13 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets,
     elif layout == "imgtop":
         rows = "".join(_pt_card(j, p) for j, p in enumerate(pts))
         cols2 = " cols2" if len(pts) >= 4 else ""
-        img_h = 230 if len(pts) >= 4 else 300
+        img_h = 300 if len(pts) < 4 else 230
+        if dens == " dense":
+            img_h = min(img_h, 210)
+        elif dens == " xdense":
+            img_h = min(img_h, 170)
         body = f"""
-      <div class="content-inner imgtop">
+      <div class="content-inner imgtop{dens}">
         {head}
         <div class="top-img" style="height:{img_h}px"><img src="{image}" alt=""></div>
         <div class="grid{cols2}">{rows}</div>
@@ -383,22 +418,61 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets,
                 stats.append(_pc_html(p))
         four = " four" if len(stats) >= 4 else ""
         body = f"""
-      <div class="content-inner">
+      <div class="content-inner{dens}">
         {head}
         <div class="stats{four}">{''.join(stats)}</div>
       </div>"""
     elif layout == "grid":
-        cells = "".join(_pc_html(p) for p in pts[:4])
+        cells = "".join(_pc_html(p) for p in pts[:6])
         body = f"""
-      <div class="content-inner">
+      <div class="content-inner{dens}">
         {head}
         <div class="g2">{cells}</div>
+      </div>"""
+    elif layout == "twocol":
+        # 双栏：左侧核心观点卡（第一条要点放大），右侧其余要点列表
+        first, rest = pts[0], pts[1:]
+        quote_k = (f'<div class="qk">{html.escape(first["k"])}</div>' if first["k"] else "")
+        rows = "".join(_pt_card(j, p) for j, p in enumerate(rest))
+        body = f"""
+      <div class="content-inner twocol{dens}">
+        {head}
+        <div class="quote">
+          <div class="qlabel">核心观点</div>
+          {quote_k}
+          <div class="qv">{html.escape(first["v"])}</div>
+        </div>
+        <div class="grid">{rows}</div>
+      </div>"""
+    elif layout == "timeline":
+        # 时间轴/步骤：左侧竖轨 + 圆点编号 + 右侧内容
+        rows = "".join(
+            f'<div class="tl-row"><div class="tl-dot">{j + 1}</div>'
+            f'<div class="tl-t">{kv}<span class="pv">{html.escape(p["v"])}</span></div></div>'
+            for j, p in enumerate(pts)
+            for kv in [(f'<span class="pk">{html.escape(p["k"])}</span>' if p["k"] else "")]
+        )
+        body = f"""
+      <div class="content-inner{dens}">
+        {head}
+        <div class="tl">{rows}</div>
+      </div>"""
+    elif layout == "feature":
+        # 大字观点：第一条作主视觉陈述，其余收缩为小卡
+        first, rest = pts[0], pts[1:]
+        hero_k = (f'<div class="pk hero-k">{html.escape(first["k"])}</div>' if first["k"] else "")
+        small = "".join(_pc_html(p) for p in rest[:4])
+        body = f"""
+      <div class="content-inner feature{dens}">
+        {head}
+        <div class="hero">{hero_k}<div class="hv">{html.escape(first["v"])}</div></div>
+        {'<div class="g2">' + small + '</div>' if small else ''}
       </div>"""
     else:  # list
         rows = "".join(_pt_card(j, p) for j, p in enumerate(pts))
         single = " single" if len(pts) <= 3 else ""
         body = f"""
-      <div class="content-inner{single}">
+      <div class="content-inner{single}{dens}">
         {head}
         <div class="grid">{rows}</div>
       </div>"""
@@ -454,9 +528,9 @@ def build_slides_html(slides: List[Dict], theme: Dict | None) -> str:
 body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};background:#000;}}
 /* ---------- 全局防溢出：长词/URL 强制断行 + 行数截断（文字超出是大忌） ---------- */
 .slide-title,.lead,.pk,.pv,.card-t,.pc .pk,.pc .pv,.stat .n,.stat .k,.stat .v,
-.chip,.cover-title,.thanks,.foot{{overflow-wrap:anywhere;word-break:break-word;}}
-.card-t,.pc .pv,.stat .v{{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;}}
-.pc .pv,.txt-col .card-t{{-webkit-line-clamp:3;}}
+.chip,.cover-title,.thanks,.foot,.qv,.hv,.tl-t{{overflow-wrap:anywhere;word-break:break-word;}}
+.card-t,.pc .pv,.stat .v{{display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;}}
+.pc .pv,.txt-col .card-t{{-webkit-line-clamp:4;}}
 .lead{{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}}
 .slide-title{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
 .grid,.g2,.stats{{overflow:hidden;min-height:0;}}
@@ -526,7 +600,7 @@ body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};backgro
 .content-inner.with-img{{display:grid;grid-template-columns:1.05fr .95fr;gap:52px;
     align-content:start;}}
 .content-inner.with-img.rev{{grid-template-columns:.95fr 1.05fr;}}
-.content-inner.with-img .slide-title,.content-inner.with-img .head-bar{{grid-column:1 / -1;}}
+.head-group{{grid-column:1 / -1;}}
 .content-inner.imgtop{{display:flex;flex-direction:column;}}
 .top-img{{height:300px;border-radius:20px;overflow:hidden;margin-bottom:32px;
     box-shadow:0 14px 40px rgba(20,32,52,.16);border:1px solid rgba(120,140,170,.16);
@@ -541,6 +615,75 @@ body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};backgro
 .img-wrap{{border-radius:24px;overflow:hidden;box-shadow:0 18px 48px rgba(20,32,52,.18);
     min-height:560px;align-self:stretch;border:1px solid rgba(120,140,170,.18);}}
 .img-wrap img{{width:100%;height:100%;object-fit:cover;display:block;}}
+/* ---------- 版式：双栏（左核心观点 + 右要点列表） ---------- */
+.twocol{{display:grid;grid-template-columns:.92fr 1.35fr;gap:48px;align-content:start;}}
+.twocol .grid{{gap:22px;}}
+.quote{{border-radius:22px;padding:52px 46px;color:#fff;position:relative;
+    background:linear-gradient(150deg,{primary} 0%,{_shade(primary, 0.30)} 100%);
+    box-shadow:0 16px 44px {_alpha(primary, 0.28)};align-self:stretch;}}
+.quote .qlabel{{font-size:21px;letter-spacing:6px;opacity:.72;margin-bottom:22px;}}
+.quote .qk{{font-size:40px;font-weight:800;margin-bottom:18px;}}
+.quote .qv{{font-size:30px;line-height:1.75;font-weight:500;opacity:.95;}}
+/* ---------- 版式：时间轴 / 步骤 ---------- */
+.tl{{position:relative;margin:6px 0 0 28px;padding-left:54px;
+    border-left:4px solid {_alpha(primary, 0.22)};display:flex;flex-direction:column;
+    justify-content:flex-start;gap:8px;flex:1;min-height:0;}}
+.tl-row{{position:relative;padding:17px 0;}}
+.tl-dot{{position:absolute;left:-81px;top:16px;width:50px;height:50px;border-radius:50%;
+    background:{primary};color:#fff;display:flex;align-items:center;justify-content:center;
+    font-size:22px;font-weight:800;box-shadow:0 0 0 8px {_alpha(primary, 0.12)};}}
+.tl-t{{font-size:29px;line-height:1.6;}}
+/* ---------- 版式：大字观点 ---------- */
+.feature .hero{{padding:44px 50px;border-left:12px solid {primary};
+    background:{_alpha(primary, 0.07)};border-radius:0 20px 20px 0;margin-bottom:30px;}}
+.feature .hero .hero-k{{font-size:26px;margin:0 0 12px;}}
+.feature .hero .hv{{font-size:36px;line-height:1.62;font-weight:600;color:inherit;}}
+/* ---------- 密度自适应：内容多时整体收缩，保证永不裁切 ---------- */
+.dense .slide-title{{font-size:48px;margin-bottom:10px;}}
+.dense .lead{{font-size:23px;margin-bottom:18px;}}
+.dense .head-bar{{margin-bottom:26px;}}
+.dense .grid,.dense .g2{{gap:16px;}}
+.dense .card{{padding:18px 28px;}}
+.dense .card-t{{font-size:25px;}}
+.dense .num{{width:48px;height:48px;font-size:22px;border-radius:12px;}}
+.dense .pc{{padding:22px 30px;}}
+.dense .pc .pk{{font-size:26px;margin-bottom:8px;}}
+.dense .pc .pv{{font-size:22px;}}
+.dense .stat{{padding:34px 30px;}}
+.dense .stat .n{{font-size:70px;}}
+.dense .stat .k{{font-size:25px;margin-top:14px;}}
+.dense .stat .v{{font-size:20px;}}
+.dense .tl-t{{font-size:24px;}}
+.dense .tl-row{{padding:12px 0;}}
+.dense .tl-dot{{width:42px;height:42px;font-size:19px;left:-73px;}}
+.dense .quote{{padding:36px 38px;}}
+.dense .quote .qk{{font-size:32px;}}
+.dense .quote .qv{{font-size:25px;}}
+.dense .feature .hero{{padding:30px 38px;margin-bottom:22px;}}
+.dense .feature .hero .hv{{font-size:28px;}}
+.xdense .slide-title{{font-size:43px;margin-bottom:8px;}}
+.xdense .lead{{font-size:21px;margin-bottom:14px;}}
+.xdense .head-bar{{margin-bottom:20px;}}
+.xdense .grid,.xdense .g2{{gap:13px;}}
+.xdense .card{{padding:14px 22px;gap:18px;}}
+.xdense .card-t{{font-size:21px;}}
+.xdense .num{{width:40px;height:40px;font-size:18px;border-radius:10px;}}
+.xdense .pc{{padding:17px 24px;}}
+.xdense .pc .pk{{font-size:22px;margin-bottom:6px;}}
+.xdense .pc .pv{{font-size:19px;}}
+.xdense .stat{{padding:24px 24px;}}
+.xdense .stat .n{{font-size:54px;}}
+.xdense .stat .k{{font-size:21px;margin-top:10px;}}
+.xdense .stat .v{{font-size:18px;}}
+.xdense .tl-t{{font-size:21px;}}
+.xdense .tl-row{{padding:9px 0;}}
+.xdense .tl-dot{{width:36px;height:36px;font-size:17px;left:-67px;box-shadow:0 0 0 6px {_alpha(primary, 0.12)};}}
+.xdense .quote{{padding:28px 30px;}}
+.xdense .quote .qk{{font-size:26px;}}
+.xdense .quote .qv{{font-size:21px;}}
+.xdense .feature .hero{{padding:24px 30px;margin-bottom:16px;}}
+.xdense .feature .hero .hv{{font-size:24px;}}
+.xdense .img-wrap{{min-height:420px;}}
 .thanks{{margin-top:70px;font-size:30px;letter-spacing:6px;color:{_alpha(primary, 0.7)};}}
 /* ---------- 风格 ---------- */
 {css}

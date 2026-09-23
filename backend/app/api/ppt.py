@@ -1,4 +1,5 @@
 """PPT 生成 / 编辑 / 导入 / 下载 / 缩略图。"""
+import threading
 from hashlib import md5
 from pathlib import Path
 
@@ -53,9 +54,12 @@ def _real_pages(project: dict):
     sig = md5(f"{pptx.name}|{pptx.stat().st_size}".encode("utf-8")).hexdigest()[:12]
     out = d / "thumbs_real" / sig
     marker = out / ".done"
+    failed_marker = out / ".failed"
     pngs = sorted(out.glob("page_*.png"))
     if pngs and marker.exists():
         return pngs
+    if failed_marker.exists():
+        return None  # 已确认失败，不再反复尝试昂贵转换
     from ..services.pptx_render import render_pptx_real
 
     res = render_pptx_real(pptx, out)
@@ -63,8 +67,69 @@ def _real_pages(project: dict):
         pngs, _trans, _engine = res
         if pngs:
             marker.write_text("ok", encoding="utf-8")
+            # 转场信息一并缓存，供视频合成复用（免去二次转换 PPT）
+            try:
+                import json as _json
+                (out / "transitions.json").write_text(
+                    _json.dumps(_trans, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
             return sorted(out.glob("page_*.png"))
+    failed_marker.write_text("convert failed", encoding="utf-8")
     return None
+
+
+# 正在后台预热原始画面的项目签名集合（防重复起线程）
+_warming: set = set()
+_warm_lock = threading.Lock()
+
+
+def _ensure_warm(project: dict) -> dict:
+    """确保原始画面转换线程在跑（幂等），返回状态供前端展示进度。
+
+    {active, ready, failed, done, total}；
+    active=False 表示非导入项目（无原始画面概念）。
+    """
+    total = len(project.get("slides", []))
+    rel = project.get("files", {}).get("pptx")
+    if rel != "upload.pptx":
+        return {"active": False, "ready": True, "failed": False,
+                "done": total, "total": total}
+    d = Path(store.project_dir(project["id"]))
+    pptx = d / rel
+    if not pptx.exists():
+        return {"active": False, "ready": True, "failed": True,
+                "done": 0, "total": total}
+    sig = md5(f"{pptx.name}|{pptx.stat().st_size}".encode("utf-8")).hexdigest()[:12]
+    out = d / "thumbs_real" / sig
+    done = len(list(out.glob("page_*.png"))) if out.exists() else 0
+    failed = (out / ".failed").exists()
+    ready = (out / ".done").exists() or failed
+    # 阶段：convert=soffice 整体转 PDF（无逐页进度）；render=逐页出图（有进度）
+    stage = "done" if ready else ("render" if done > 0 else "convert")
+    if not ready and sig not in _warming:
+        with _warm_lock:
+            if sig not in _warming:
+                _warming.add(sig)
+
+                def _run(p=project, s=sig):
+                    try:
+                        _real_pages(p)
+                    finally:
+                        _warming.discard(s)
+
+                threading.Thread(target=_run, daemon=True).start()
+    return {"active": True, "ready": ready, "failed": failed,
+            "done": done, "total": total, "stage": stage}
+
+
+@router.get("/api/ppt/{project_id}/real-status")
+def real_status(project_id: str):
+    """原始画面提取进度（前端轮询展示进度条）。"""
+    project = store.load_project(project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    return _ensure_warm(project)
 
 
 @router.post("/api/ppt/generate/{project_id}")
@@ -108,6 +173,14 @@ def generate_ppt(project_id: str, payload: dict = None):
                 img_count = 0  # 配图失败不阻塞生成
         progress(0.95, "正在构建 PPTX 文件…")
         _rebuild_pptx(project)
+        # 预渲染预览页：预览缩略图即点即有（免去打开预览后逐页灰块等待）
+        try:
+            progress(0.97, "正在渲染页面预览…")
+            h = _slides_hash(project["slides"]) + "_" + (theme.get("primary") or "#1a3a5c").lstrip("#")
+            render_slides(project["slides"], Path(store.project_dir(project["id"])) / "thumbs_render" / h,
+                          theme=theme)
+        except Exception:
+            pass  # 预渲染失败不阻塞生成，缩略图会走懒加载
         store.save_project(project)
         return {"source": outline["source"], "slides": len(project["slides"]),
                 "images": img_count, "warning": outline.get("llm_error")}
@@ -150,9 +223,17 @@ async def import_ppt(file: UploadFile = File(...)):
     d = Path(store.project_dir(project["id"]))
     upload = d / "upload.pptx"
     upload.write_bytes(await file.read())
-    project["slides"] = parse_pptx(upload)
+    # 解析放线程池：大 PPT 解析耗时数秒，不能阻塞事件循环（否则全应用卡死）
+    from fastapi.concurrency import run_in_threadpool
+
+    project["slides"] = await run_in_threadpool(parse_pptx, upload)
     project["files"]["pptx"] = "upload.pptx"
     store.save_project(project)
+    # 后台预热原始页面渲染：大 PPT 转 PDF 耗时较长，提前跑，
+    # 用户进预览时缩略图可直接命中缓存
+    import threading
+
+    threading.Thread(target=_real_pages, args=(project,), daemon=True).start()
     return {
         "projectId": project["id"],
         "slides": project["slides"],
@@ -169,22 +250,29 @@ async def import_docx(file: UploadFile = File(...)):
     d = Path(store.project_dir(project["id"]))
     upload = d / "upload.docx"
     upload.write_bytes(await file.read())
-    try:
+    # 解析与素材提取放线程池：大文档解析耗时，不能阻塞事件循环
+    from fastapi.concurrency import run_in_threadpool
+
+    def _parse_docx():
         slides = docx_to_slides(upload)
+        full = ""
+        try:
+            from docx import Document as _Doc
+
+            paras = [_clean_text(p.text) for p in _Doc(str(upload)).paragraphs]
+            full = "\n".join(x for x in paras if x.strip())
+        except Exception:
+            full = ""
+        return slides, full[:6000]
+
+    try:
+        slides, docx_text = await run_in_threadpool(_parse_docx)
     except Exception as e:
         raise HTTPException(400, f"Word 解析失败：{e}")
     if len(slides) < 2:
         raise HTTPException(400, "文档内容太少，无法生成 PPT（请确认有正文段落）")
     project["slides"] = slides
-    # 全文素材：供后续「AI 分析 → 框架设计 → 生成」使用
-    try:
-        from docx import Document as _Doc
-
-        paras = [_clean_text(p.text) for p in _Doc(str(upload)).paragraphs]
-        full = "\n".join(x for x in paras if x.strip())
-        project["docx_text"] = full[:6000]
-    except Exception:
-        project["docx_text"] = ""
+    project["docx_text"] = docx_text
     project["theme"] = {
         "primary": "#1a3a5c",
         "style": "简约商务",
@@ -230,7 +318,11 @@ def slide_thumb(project_id: str, index: int):
 
     d = Path(store.project_dir(project_id))
     # 1. 导入型项目：优先渲染原始 PPT 页面（所见即所得）
-    real = _real_pages(project)
+    #    转换未就绪时立即返回 202（不阻塞请求线程），前端自动重试
+    st = _ensure_warm(project)
+    if st["active"] and not st["ready"]:
+        return Response(status=202)
+    real = None if st["failed"] else _real_pages(project)
     if real:
         h = "real_" + md5(str(real[index]).encode("utf-8")).hexdigest()[:8]
         thumb_dir = d / "thumbs" / h
@@ -270,7 +362,10 @@ def slide_page_full(project_id: str, index: int):
         raise HTTPException(404, "页码不存在")
 
     d = Path(store.project_dir(project_id))
-    real = _real_pages(project)
+    st = _ensure_warm(project)
+    if st["active"] and not st["ready"]:
+        return Response(status=202)
+    real = None if st["failed"] else _real_pages(project)
     if real:
         return FileResponse(real[index], media_type="image/png")
 

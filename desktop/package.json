@@ -1,6 +1,6 @@
 {
   "name": "ppt-video-studio",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "PPT 一键转视频工作台：主题生成 PPT / 导入 PPT → 解说词 → 配音 → MP4。© 2026 梦极",
   "author": "奇葩锅 <mr_xiaoping@163.com>",
   "main": "src/main/main.js",
@@ -9,7 +9,8 @@
     "dev:backend": "cd ../backend && ${PVS_PYTHON:-python3} -m app.main",
     "build": "vite build",
     "start": "electron .",
-    "dist": "npm run build && electron-builder --win"
+    "dist": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
   "build": {
     "appId": "com.pptvideostudio.app",
@@ -46,6 +47,25 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "artifactName": "${productName} Setup ${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "artifactName": "${productName}-${version}-mac.${ext}"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-mac.dmg"
     }
   },
   "dependencies": {

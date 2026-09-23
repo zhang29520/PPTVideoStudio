@@ -78,11 +78,15 @@ def synthesize_pages(
     volume: str | None = None,
     progress=None,
 ) -> Dict:
-    """逐页合成音频，返回 {audio_paths, durations, engine}。
+    """并行合成音频（5 路并发，network-bound 提速约 4~5 倍）。
 
+    返回 {audio_paths, durations, engine}。
     某页合成失败（网络/配额）→ 用静音兜底，保证流水线不断。
     progress(ratio, message) 用于任务进度上报。
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+
     s = load_settings()
     voice = voice or s["tts_voice"]
     rate = rate or s["tts_rate"]
@@ -90,28 +94,45 @@ def synthesize_pages(
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    audio_paths: List[str] = []
-    durations: List[float] = []
-    ok_count = 0
     total = max(1, len(pages))
+    workers = min(5, total)
+    if progress:
+        progress(0.0, f"开始并行合成 {total} 页配音（{workers} 路并发）…")
 
-    for i, text in enumerate(pages):
-        if progress:
-            progress(i / total, f"正在合成第 {i + 1}/{total} 页配音…")
+    done_lock = threading.Lock()
+    done_count = 0
+
+    def job(i: int, text: str):
+        nonlocal done_count
         p = out / f"page_{i:03d}.mp3"
         # 中文按 ~4.5 字/秒 估算兜底时长
         est = max(3.0, len(text) / 4.5 + 1.0)
-        if text.strip() and _synth_one(text, voice, rate, volume, p):
-            ok_count += 1
+        ok = bool(text.strip()) and _synth_one(text, voice, rate, volume, p)
+        if ok:
             d = _audio_duration(p)
             if d <= 0:
                 _silence(p, est)
                 d = est
-            durations.append(d)
         else:
             _silence(p, est)
-            durations.append(est)
-        audio_paths.append(str(p))
+            d = est
+        with done_lock:
+            done_count += 1
+            if progress:
+                progress(done_count / total,
+                         f"已完成 {done_count}/{total} 页配音…")
+        return i, ok
+
+    results: List[bool] = [False] * len(pages)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = [ex.submit(job, i, t) for i, t in enumerate(pages)]
+        for f in as_completed(futs):
+            i, ok = f.result()
+            results[i] = ok
+
+    audio_paths = [str(out / f"page_{i:03d}.mp3") for i in range(len(pages))]
+    durations = [_audio_duration(Path(p)) or 3.0 for p in audio_paths]
+    ok_count = sum(1 for r in results if r)
 
     return {
         "audio_paths": audio_paths,

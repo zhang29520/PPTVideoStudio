@@ -105,11 +105,13 @@ def compose_video(
     effects: bool = False,
     bgm: bool = True,
     bgm_style: str = "calm",
+    real_pngs: list | None = None,
+    real_transitions: list | None = None,
 ) -> Dict:
     """合成最终 MP4。返回 {video_path, srt_path, duration, pages, engine}。
 
-    - pptx_path 存在时优先用 PowerPoint/WPS/LibreOffice 渲染原始 PPT 页面；
-      失败回退内置文字版式。
+    - real_pngs 优先（预览阶段已缓存的原始页面，零转换开销）；
+      其次 pptx_path 现场渲染原始 PPT 页面；失败回退内置文字版式。
     - follow_transition=True 时按 PPT 自带的切换动效处理转场
       （硬切→无转场；其他动效→按其时长淡入淡出近似）。
     """
@@ -121,11 +123,16 @@ def compose_video(
 
     width, height = RES_MAP.get(resolution, RES_MAP["1080p"])
 
-    # 1. 渲染页面：优先原始 PPT 画面
+    # 1. 渲染页面：优先缓存 → 现场转换 → 内置版式
     pngs = None
     transitions: List[Dict] | None = None
     engine = "内置版式"
-    if pptx_path:
+    if real_pngs:
+        pngs = list(real_pngs)
+        transitions = real_transitions or []
+        engine = "原始画面（缓存复用）"
+        rep(0.08, f"已复用预览阶段的原始画面（{len(pngs)} 页，无需重新转换）")
+    if pngs is None and pptx_path:
         rep(0.03, "正在调用 PPT 引擎导出原始页面…")
         from .pptx_render import render_pptx_real
 
@@ -151,7 +158,7 @@ def compose_video(
     total = max(1, len(pngs))
     for i, png in enumerate(pngs):
         rep(0.15 + 0.65 * i / total, f"正在合成第 {i + 1}/{total} 页画面与配音…")
-        dur = padded[i]
+        dur = padded[i] if i < len(padded) else (padded[-1] if padded else 5.0)
         seg = tmp / "seg" / f"seg_{i:03d}.mp4"
         # 转场时长：跟随 PPT 动效 or 全局；随机动效模式下每页微调
         eff_td = td
@@ -182,7 +189,7 @@ def compose_video(
             "-vf", vf,
             "-af", "apad",
             "-t", f"{dur:.2f}",
-            "-c:v", "libx264", "-preset", "fast", "-tune", "stillimage",
+            "-c:v", "libx264", "-preset", "veryfast", "-tune", "stillimage",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             str(seg),
@@ -233,7 +240,7 @@ def compose_video(
         if not _run([
             "ffmpeg", "-y", "-i", str(merged),
             "-vf", f"subtitles={srt_escaped}:force_style='FontSize=16,Outline=1'",
-            "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
             "-c:a", "copy", str(final),
         ], timeout=600):
             shutil.copy(merged, final)

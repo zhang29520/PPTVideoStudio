@@ -1,4 +1,6 @@
 """视频导出 API：后台任务 + 进度查询 + 下载。"""
+import json
+from hashlib import md5
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -8,6 +10,33 @@ from .. import store, tasks
 from ..services.video import compose_video
 
 router = APIRouter()
+
+
+def _cached_real(project: dict):
+    """预览阶段已转换的原始页面缓存（thumbs_real/<sig>/page_*.png + .done）。
+
+    返回 (pngs, transitions) 或 None。命中后视频合成零转换开销（省 2~5 分钟）。
+    """
+    rel = project.get("files", {}).get("pptx")
+    if rel != "upload.pptx":
+        return None
+    d = Path(store.project_dir(project["id"]))
+    pptx = d / rel
+    if not pptx.exists():
+        return None
+    sig = md5(f"{pptx.name}|{pptx.stat().st_size}".encode("utf-8")).hexdigest()[:12]
+    out = d / "thumbs_real" / sig
+    pngs = sorted(out.glob("page_*.png"))
+    if not (pngs and (out / ".done").exists()):
+        return None
+    transitions = []
+    tj = out / "transitions.json"
+    if tj.exists():
+        try:
+            transitions = json.loads(tj.read_text(encoding="utf-8"))
+        except Exception:
+            transitions = []
+    return pngs, transitions
 
 
 @router.post("/api/video/export/{project_id}")
@@ -24,14 +53,23 @@ def export_video(project_id: str, payload: dict = None):
         raise HTTPException(400, "请先生成与页面数一致的配音")
 
     payload = payload or {}
-    # 原始 PPT 文件（导入型项目为 upload.pptx；生成型为重建的 output.pptx）
+    # 仅导入型项目（upload.pptx）走 Office/LibreOffice 渲染原始画面；
+    # 生成型项目用内置版式 HTML 渲染——与预览画面完全一致，
+    # 且避免 LibreOffice 重绘丢失主题样式（绿卡片变白底）+ 省去整轮转换。
     pptx_rel = project.get("files", {}).get("pptx")
-    pptx_path = str(Path(store.project_dir(project_id)) / pptx_rel) if pptx_rel else None
+    pptx_path = str(Path(store.project_dir(project_id)) / pptx_rel) if pptx_rel == "upload.pptx" else None
     # 补齐解说词长度（导入型项目可能没有 script）
     while len(script) < len(project["slides"]):
         script.append(project["slides"][len(script)].get("title", ""))
     while len(durations) < len(audio):
         durations.append(5.0)
+
+    # 复用预览阶段的原始页面缓存（页数与幻灯片一致才复用，避免错位）
+    cached = _cached_real(project)
+    if cached and len(cached[0]) == len(project["slides"]):
+        real_pngs, real_transitions = cached
+    else:
+        real_pngs, real_transitions = None, None
 
     def job(progress):
         progress(0.05, "渲染页面图")
@@ -53,6 +91,8 @@ def export_video(project_id: str, payload: dict = None):
             effects=bool(payload.get("effects", project.get("effects", False))),
             bgm=bool(payload.get("bgm", True)),
             bgm_style=str(payload.get("bgm_style") or "calm"),
+            real_pngs=real_pngs,
+            real_transitions=real_transitions,
         )
         project["files"]["video"] = Path(result["video_path"]).name
         project["files"]["srt"] = Path(result["srt_path"]).name

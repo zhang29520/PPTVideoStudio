@@ -1,0 +1,69 @@
+name: Build macOS Installer
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-13 # Intel x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build backend binary (PyInstaller)
+        run: |
+          cd backend
+          pip install -r requirements.txt pyinstaller httpx python-multipart
+          pyinstaller --onefile --name pvs-backend --paths . run_backend.py \
+            --collect-all pptx \
+            --collect-all multipart \
+            --collect-all fitz \
+            --hidden-import uvicorn.logging \
+            --hidden-import uvicorn.loops.auto \
+            --hidden-import uvicorn.protocols.http.auto \
+            --hidden-import uvicorn.protocols.http.h11_impl \
+            --hidden-import uvicorn.protocols.websockets.auto \
+            --hidden-import uvicorn.lifespan.on
+          mkdir -p ../desktop/resources/pvs-backend
+          cp dist/pvs-backend ../desktop/resources/pvs-backend/
+
+      - name: Bundle FFmpeg (static build)
+        run: |
+          mkdir -p desktop/resources/ffmpeg
+          curl -L -o ffmpeg.zip "https://evermeet.cx/ffmpeg/getrelease/zip"
+          unzip -o ffmpeg.zip -d desktop/resources/ffmpeg/
+          curl -L -o ffprobe.zip "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip"
+          unzip -o ffprobe.zip -d desktop/resources/ffmpeg/
+          chmod +x desktop/resources/ffmpeg/ffmpeg desktop/resources/ffmpeg/ffprobe
+
+      - name: Install frontend deps
+        run: |
+          cd desktop
+          npm install
+
+      - name: Build & package app
+        run: |
+          cd desktop
+          npm run build
+          npx electron-builder --mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PPTVideoStudio-mac-installer
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip

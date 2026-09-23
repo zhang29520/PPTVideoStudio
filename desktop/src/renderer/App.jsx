@@ -75,9 +75,26 @@ function FileBtn({ children, accept, onFile, kind = "ghost", icon, disabled }) {
   );
 }
 
-function Progress({ progress }) {
+function Progress({ progress, hint }) {
+  const t0 = useRef(null);
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (!progress) { t0.current = null; return; }
+    if (!t0.current) t0.current = Date.now();
+    const t = setInterval(() => force((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [progress]);
   if (!progress) return null;
   const pct = Math.round((progress.progress || 0) * 100);
+  const sec = t0.current ? Math.floor((Date.now() - t0.current) / 1000) : 0;
+  const elapsed = sec >= 5 ? ` · 已等待 ${sec >= 60 ? `${Math.floor(sec / 60)} 分 ${sec % 60} 秒` : `${sec} 秒`}` : "";
+  // 线性 ETA 预估：进度至少到 8% 才有足够样本，避免早期外推出"60 分钟"的误导数字
+  const r = progress.progress || 0;
+  let eta = "";
+  if (sec >= 15 && r >= 0.08 && r < 0.9) {
+    const left = Math.round((sec / r) * (1 - r));
+    eta = ` · 预计还需 ${left >= 90 ? `约 ${Math.round(left / 60)} 分钟` : `${left} 秒`}`;
+  }
   return (
     <div style={{ marginTop: 12, maxWidth: 560 }}>
       <div style={{ background: "#F1EDE8", borderRadius: 8, height: 8, overflow: "hidden" }}>
@@ -88,7 +105,11 @@ function Progress({ progress }) {
       </div>
       <div style={{ color: MUTED, marginTop: 6, fontSize: 13 }}>
         {progress.message || (progress.status === "done" ? "完成 ✔" : "处理中…")} {pct > 0 && pct < 100 ? `${pct}%` : ""}
+        {elapsed}{eta}
       </div>
+      {hint && progress.status === "running" && (
+        <div style={{ color: "#B0A9A0", marginTop: 3, fontSize: 12 }}>{hint}</div>
+      )}
     </div>
   );
 }
@@ -138,16 +159,17 @@ function Seg({ options, value, onChange, style = {} }) {
 }
 
 /* ---------- 缩略图 ---------- */
-function Thumb({ projectId, index, tick, onZoom, big, w = 150 }) {
+function Thumb({ projectId, index, tick, onZoom, big, w = 150, pending }) {
   const [url, setUrl] = useState("");
   const [tried, setTried] = useState(0);
   useEffect(() => {
     let alive = true;
     if (!projectId) return;
+    if (pending) { setUrl(""); return; }   // 原始画面提取中：不出图，只显示骨架
     setUrl("");
-    api.thumbUrl(projectId, index).then((u) => alive && setUrl(`${u}?t=${tick}`)).catch(() => {});
+    api.thumbUrl(projectId, index).then((u) => alive && setUrl(`${u}?t=${tick}-${Date.now()}`)).catch(() => {});
     return () => { alive = false; };
-  }, [projectId, index, tick]);
+  }, [projectId, index, tick, pending]);
   // 图片还没渲染出来时每 2.5s 自动重试，直到加载成功
   function onErr() {
     if (tried > 40) return;
@@ -158,14 +180,18 @@ function Thumb({ projectId, index, tick, onZoom, big, w = 150 }) {
   }
   return (
     <div
-      onClick={big ? undefined : onZoom}
+      onClick={big || pending ? undefined : onZoom}
       style={{
         width: w, height: (w * 9) / 16, flexShrink: 0, borderRadius: 8, overflow: "hidden",
-        background: "#F1EDE8", border: `1px solid ${LINE}`, cursor: big ? "default" : "zoom-in",
+        background: "#F1EDE8", border: `1px solid ${LINE}`, cursor: big || pending ? "default" : "zoom-in",
         display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
       }}
     >
-      {url ? (
+      {pending ? (
+        <span style={{ color: "#A89F93", fontSize: 11, textAlign: "center", lineHeight: 1.5, padding: 4, animation: "pvsSkel 1.6s ease-in-out infinite" }}>
+          第{index + 1}页<br />提取中…
+        </span>
+      ) : url ? (
         <img src={url} onError={onErr} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={`第${index + 1}页`} />
       ) : (
         <span style={{ color: "#A89F93", fontSize: 11, textAlign: "center", lineHeight: 1.5, padding: 4 }}>
@@ -357,7 +383,7 @@ const STYLES = ["简约商务", "Slidev 极客", "科技渐变", "清新留白",
 function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   const [step, setStep] = useState(1); // 1 输入 2 版式 3 预览
   const [topic, setTopic] = useState("");
-  const [count, setCount] = useState(8);
+  const [count, setCount] = useState(12);
   const [color, setColor] = useState(COLORS[0][0]);
   const [style, setStyle] = useState(STYLES[0]);
   const [projects, setProjects] = useState([]);
@@ -370,31 +396,55 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   const [zoomIdx, setZoomIdx] = useState(-1);
   const [noLLM, setNoLLM] = useState(false);
   const [aiList, setAiList] = useState([]);   // [{id,name,model}]
-  const [engine, setEngine] = useState("builtin");
+  const [engine, setEngine] = useState(null); // null=未初始化；加载后默认选第一个 AI 配置
   const [fx, setFx] = useState(true);         // 随机切换动效
   const [fromDocx, setFromDocx] = useState(false); // Word 导入项目
 
   const refresh = useCallback(() => api.listProjects().then(setProjects).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh, project?.id]);
 
-  // 读取已保存的 AI 配置列表；默认引擎固定为「内置引擎」，AI 配置只是可选增强
+  // 读取已保存的 AI 配置列表；默认选中第一个 AI（内置模板仅作备选）
   useEffect(() => {
     api.getSettings().then((st) => {
       const list = (st.ai_profiles || []).filter((p) => p.base && p.model);
       setAiList(list);
       setNoLLM(list.length === 0);
+      setEngine((e) => e ?? (list.length ? list[0].id : "builtin"));
     }).catch(() => {});
   }, []);
 
-  // 打开已有项目时直接进入预览（并识别是否为导入的 PPT：原始画面不可编辑）
+  // 打开已有项目：有 PPT 成品（生成/导入过）才直接进预览；
+  // Word 导入但尚未生成 → 停在版式设置页，绝不自动跳预览
   const [imported, setImported] = useState(false);
+  const [genDone, setGenDone] = useState(false);
+  // 导入项目的原始画面提取进度（轮询 real-status，就绪后刷新缩略图）
+  const [realSt, setRealSt] = useState(null);
+  useEffect(() => {
+    if (step !== 3 || !project?.id || !imported) { setRealSt(null); return; }
+    let alive = true;
+    let timer = null;
+    const poll = () => {
+      api.realStatus(project.id).then((s) => {
+        if (!alive) return;
+        setRealSt(s);
+        if (s.ready) { setThumbTick((t) => t + 1); setRealSt(s); }
+        else timer = setTimeout(poll, 3000);
+      }).catch(() => { if (alive) timer = setTimeout(poll, 5000); });
+    };
+    poll();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [step, project?.id, imported]);
   useEffect(() => {
     if (!project?.id) return;
     Promise.all([api.getSlides(project.id), api.getProject(project.id)])
       .then(([d, p]) => {
         setSlides(d.slides || []);
         setImported(p.files?.pptx === "upload.pptx");
-        if ((d.slides || []).length) setStep(3);
+        const done = !!p.files?.pptx;
+        setGenDone(done);
+        setFromDocx(!!p.docx_source);
+        if ((d.slides || []).length && done) setStep(3);
+        else if (p.docx_source) setStep(2);
       }).catch(() => {});
   }, [project?.id]);
 
@@ -402,16 +452,19 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
     setBusy(true); setMsg(""); setErr(false); setProgress(null);
     try {
       let pid = project?.id;
-      if (!pid) {
+      // Word 导入项目复用当前项目（docx 素材存在该项目上）；
+      // 其他情况一律新建项目，避免新主题覆盖旧项目
+      if (!pid || !fromDocx) {
         const p = await api.createProject(topic);
         pid = p.id;
         setProject({ id: pid, topic });
       }
+      // 内容引擎：按用户选择；默认已选第一个 AI 配置
       await runTask(
         () => api.generatePpt(pid, {
           slides: count, color, style,
           engine: engine === "builtin" ? "builtin" : "ai",
-          profile_id: engine === "builtin" ? undefined : engine,
+          profile_id: engine && engine !== "builtin" ? engine : undefined,
           effects: fx,
           use_docx: true,   // Word 导入项目：基于文档内容 AI 分析生成
         }),
@@ -422,6 +475,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
       const d = await api.getSlides(pid);
       setSlides(d.slides || []);
       setThumbTick((t) => t + 1);
+      setGenDone(true);
       setStep(3);
       refresh();
       onProjectChanged?.();
@@ -441,6 +495,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
       const d = await api.getSlides(pid);
       setSlides(d.slides || []);
       setThumbTick((t) => t + 1);
+      setGenDone(true);
       setStep(3);
       setMsg(`导入成功，共 ${p.slides.length} 页 ✔`);
       refresh();
@@ -459,8 +514,9 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
       setProject({ id: pid, topic: f.name.replace(/\.docx$/i, "") });
       setSlides([]);
       setFromDocx(true);
+      setGenDone(false);
       setStep(2);   // 进入版式选择，点「开始生成」时基于 Word 内容 AI 分析生成
-      setMsg(`文档解析成功 ✔ 请在下方选择版式，点「开始生成」后将 AI 分析文档内容并重新设计框架`);
+      setMsg(`文档解析成功 ✔ 请选择版式与风格，点「开始生成」后 AI 分析文档内容并重新设计框架（通常 1~3 分钟）`);
       refresh();
     } catch (e2) {
       setMsg("Word 解析失败：" + e2.message); setErr(true);
@@ -485,6 +541,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   // 返回首页重新开始：清空当前项目回到输入主题
   function restartAll() {
     setProject(null); setSlides([]); setTopic(""); setStep(1); setFromDocx(false);
+    setGenDone(false);
     setMsg(""); setProgress(null); setBusy(false);
     onProjectChanged?.();
   }
@@ -501,8 +558,8 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
         textDecoration: step > 2 ? "underline dotted rgba(0,0,0,.35)" : "none",
       }}>② 选择版式</b>
       <span style={{ color: "#D5CFC8" }}>→</span>
-      <b onClick={() => { if (!busy && slides.length) setStep(3); }} style={{
-        color: step === 3 ? ORANGE : "#C5BFB7", cursor: slides.length ? "pointer" : "default",
+      <b onClick={() => { if (!busy && slides.length && genDone) setStep(3); }} style={{
+        color: step === 3 ? ORANGE : "#C5BFB7", cursor: slides.length && genDone ? "pointer" : "default",
       }}>③ 预览保存</b>
     </div>
   );
@@ -558,7 +615,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
       {step === 2 && (
         <div style={cardStyle}>
           <div style={labelStyle}>页面数量</div>
-          <Seg options={[[5, "5 页"], [8, "8 页"], [12, "12 页"], [15, "15 页"]]} value={count} onChange={setCount} />
+          <Seg options={[[5, "5 页"], [8, "8 页"], [12, "12 页"], [15, "15 页"], [20, "20 页"]]} value={count} onChange={setCount} />
           <div style={labelStyle}>PPT 主色（封面与标题配色）</div>
           <div style={{ display: "flex", gap: 10 }}>
             {COLORS.map(([c, name]) => (
@@ -589,18 +646,16 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
                 }}>{s}</div>
             ))}
           </div>
-          <div style={labelStyle}>AI 引擎</div>
+          <div style={labelStyle}>内容引擎（AI 生成质量远高于内置模板）</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <Seg
-              options={[["builtin", "内置 AI（免费·免配置）"], ...aiList.map((p) => [p.id, p.name || p.model])]}
-              value={engine}
+              options={[
+                ...aiList.map((p) => [p.id, `AI·${p.name || p.model}`]),
+                ["builtin", "内置模板（免费·内容较简单）"],
+              ]}
+              value={engine ?? "builtin"}
               onChange={setEngine}
             />
-            {noLLM && (
-              <span style={{ fontSize: 12, color: MUTED }}>
-                内置 AI 无需任何配置即可用；配置大模型后内容质量更高
-              </span>
-            )}
           </div>
           <div style={{ display: "flex", gap: 22, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
@@ -629,7 +684,8 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               💡 内置 AI 完全免费、无需配置，开箱即用。想要更强的内容质量，可在「高级设置 → ① PPT 生成 AI」里填入任意大模型 API（DeepSeek / 智谱 GLM / Kimi 等，注册即送额度）。
             </div>
           )}
-          <Progress progress={progress} />
+          <Progress progress={progress}
+            hint={fromDocx ? "AI 分析 Word 内容 → 框架设计 → 逐页生成，通常 1~3 分钟，请勿关闭窗口" : "分析主题 → 检索资料 → 大纲 → 逐页生成，通常 1~3 分钟"} />
           <Msg text={msg} error={err} />
         </div>
       )}
@@ -646,9 +702,45 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               <Btn kind="ghost" icon="save" onClick={savePpt} disabled={busy || !slides.length}>保存 PPT</Btn>
               <Btn icon="arrowR" onClick={() => goPanel("script")} disabled={!slides.length}>生成解说词，进入下一步 →</Btn>
             </div>
+            {/* 导入项目：原始画面提取进度（就绪后缩略图自动刷新） */}
+            {imported && realSt && !realSt.ready && !realSt.failed && (
+              <div style={{
+                marginBottom: 14, padding: "12px 16px", borderRadius: 10,
+                background: ORANGE_SOFT, border: `1px solid ${LINE}`,
+              }}>
+                <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginBottom: 6 }}>
+                  {realSt.stage === "render"
+                    ? `正在生成页面图片 ${realSt.done}/${realSt.total} 页…`
+                    : "正在将 PPT 转换为高清画面（大文件约需 2~5 分钟）…"}
+                </div>
+                {realSt.stage === "render" ? (
+                  <div style={{ background: "#F1EDE8", borderRadius: 6, height: 7, overflow: "hidden", maxWidth: 480 }}>
+                    <div style={{
+                      width: `${realSt.total ? Math.round((realSt.done / realSt.total) * 100) : 0}%`,
+                      background: ORANGE, height: "100%", transition: "width .5s", borderRadius: 6,
+                    }} />
+                  </div>
+                ) : (
+                  <div className="pvs-indet" style={{ maxWidth: 480 }}><div /></div>
+                )}
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 5 }}>
+                  转换期间进度条流动属正常现象，请勿关闭窗口；完成后缩略图会自动出现
+                </div>
+              </div>
+            )}
+            {realSt?.failed && (
+              <div style={{
+                marginBottom: 14, padding: "10px 14px", borderRadius: 10, fontSize: 12.5,
+                background: "#FFF7E8", border: "1px solid #F2DDB4", color: "#8A6116",
+              }}>
+                ⚠️ 本机转换引擎暂时不可用，预览显示的是内置版式；视频画面同样会使用内置版式。
+              </div>
+            )}
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {slides.map((_, i) => (
-                <Thumb key={i} projectId={project?.id} index={i} tick={thumbTick} w={132} onZoom={() => setZoomIdx(i)} />
+                <Thumb key={i} projectId={project?.id} index={i} tick={thumbTick} w={132}
+                  pending={imported && realSt && !realSt.ready && !realSt.failed}
+                  onZoom={() => setZoomIdx(i)} />
               ))}
             </div>
             <Msg text={msg} error={err} />
@@ -721,6 +813,7 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
 
   async function genScript() {
     setBusy(true); setMsg(""); setErr(false); setProgress(null);
+    setMsg("AI 正在撰写解说词，通常 30~120 秒，请耐心等待…");
     try {
       const r = await runTask(
         () => api.generateSpeech(project.id, { tone: "专业" }),
@@ -1047,7 +1140,7 @@ function VideoPanel({ project, goPanel }) {
         setProgress(null);
         setVideoUrl(await api.videoDownloadUrl(project.id));
         setEngine(t.result?.engine || "");
-        setMsg("视频合成完成 ✔ 点击下方下载");
+        setMsg("视频合成完成 ✔");
         clearInterval(timer.current);
       } else if (t.status === "error") {
         setProgress(null);
@@ -1137,28 +1230,28 @@ function VideoPanel({ project, goPanel }) {
         <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.8, marginTop: 10 }}>
           勾选后：你 PPT 里设置的翻页切换效果会应用到视频对应页面的转场上（硬切保持硬切；其他动效按其时长平滑过渡）。未设置动效的页面使用上方全局转场。
         </div>
-        <div style={{ marginTop: 16 }}>
-          <Btn onClick={exportVideo} disabled={running} icon="play">{running ? "合成中…" : "开始合成视频"}</Btn>
+        <div style={{ marginTop: 16, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+          {running ? (
+            <Btn onClick={() => {}} disabled icon="play">合成中…</Btn>
+          ) : videoUrl ? (
+            <Btn onClick={async () => {
+              try {
+                await api.downloadFile(videoUrl, "PPTVideoStudio.mp4");
+                setMsg("视频已开始下载，请留意系统下载提示 ✔"); setErr(false);
+              } catch (e) { setMsg("下载失败：" + e.message); setErr(true); }
+            }} icon="save">下载 MP4</Btn>
+          ) : (
+            <Btn onClick={exportVideo} icon="play">开始合成视频</Btn>
+          )}
+          {videoUrl && !running && (
+            <span style={{ fontSize: 12, color: MUTED }}>
+              {engine ? `合成引擎：${engine} · ` : ""}<span onClick={exportVideo} style={{ color: ORANGE, cursor: "pointer" }}>重新合成</span>
+            </span>
+          )}
         </div>
         <Progress progress={progress} />
         <Msg text={msg} error={err} />
       </div>
-
-      {videoUrl && !running && (
-        <div style={cardStyle}>
-          <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>导出结果{engine ? ` · ${engine}` : ""}</h3>
-          <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-            <Btn onClick={async () => {
-              try {
-                await api.downloadFile(videoUrl, "PPTVideoStudio.mp4");
-                setMsg("视频已开始下载，请留意系统下载提示 ✔");
-              } catch (e) { setMsg("下载失败：" + e.message); setErr(true); }
-            }}>下载 MP4</Btn>
-            <span style={{ fontSize: 12, color: MUTED }}>点击后浏览器默认下载，请留意系统下载提示</span>
-          </div>
-          <Msg text={msg} error={err} />
-        </div>
-      )}
     </>
   );
 }
@@ -1506,9 +1599,17 @@ export default function App() {
   const [badges, setBadges] = useState({ script: "待生成", audio: "待生成", video: "待导出" });
   const [update, setUpdate] = useState(null);
   const [newVersion, setNewVersion] = useState(null);
+  const [downloadToast, setDownloadToast] = useState(null);
 
   useEffect(() => {
     window.pvs.updateInfo().then((u) => { if (u.available) setNewVersion(u); }).catch(() => {});
+    // 原生下载完成通知（主进程 will-download 钩子推送）
+    window.pvs.onDownloadDone?.((d) => {
+      setDownloadToast(d.ok
+        ? `已保存到「下载」文件夹：${d.name}`
+        : `下载未完成：${d.name}`);
+      setTimeout(() => setDownloadToast(null), 6000);
+    });
   }, []);
 
   const goPanel = (p) => setPanel(p);
@@ -1524,7 +1625,11 @@ export default function App() {
         input:focus, textarea:focus { border-color: ${ORANGE} !important; }
         ::selection { background: #FFD9C4; }
         ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #E5DFD8; border-radius: 4px; }
-        button { font-family: inherit; }`}</style>
+        button { font-family: inherit; }
+        @keyframes pvsIndet { 0% { left: -35%; } 100% { left: 100%; } }
+        .pvs-indet { position: relative; overflow: hidden; background: #F1EDE8; border-radius: 6px; height: 7px; }
+        .pvs-indet > div { position: absolute; top: 0; width: 35%; height: 100%; border-radius: 6px; background: ${ORANGE}; animation: pvsIndet 1.4s ease-in-out infinite; }
+        @keyframes pvsSkel { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }`}</style>
 
       {/* 更新横幅 */}
       {newVersion && (
@@ -1535,6 +1640,16 @@ export default function App() {
         }}>
           发现新版本 v{newVersion.latest}，点击立即更新（GitHub / 夸克网盘）
         </div>
+      )}
+
+      {/* 下载完成提示（右下角浮层） */}
+      {downloadToast && (
+        <div style={{
+          position: "fixed", right: 18, bottom: 18, zIndex: 99,
+          background: INK, color: "#fff", fontSize: 13,
+          padding: "10px 16px", borderRadius: 10,
+          boxShadow: "0 8px 24px rgba(0,0,0,.25)",
+        }}>{downloadToast}</div>
       )}
 
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>

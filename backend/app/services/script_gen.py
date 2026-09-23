@@ -11,6 +11,9 @@ from typing import Dict, List
 
 from ..config import load_settings
 
+# 「关键词：描述」结构（用于把要点改写成口语句）；排除 URL 误匹配
+_KV_RE = re.compile(r"^(?!https?://)([^：:]{1,24})[：:]\s*(.+)$", re.S)
+
 SCRIPT_PROMPT = """你是一名专业的演讲撰稿人。下面是一份 PPT 的逐页内容（JSON），请为每一页写口语讲解词。
 
 硬性要求：
@@ -18,7 +21,8 @@ SCRIPT_PROMPT = """你是一名专业的演讲撰稿人。下面是一份 PPT �
 2. 每页讲解词必须基于该页主题展开，与页面内容强相关；禁止无关套话。
 3. 每页 60~150 字；页与页之间有自然过渡（不要每页都用"接下来，我们来看"）。
 4. 第一页是开场白（问候+主题+预告结构）；最后一页是收尾（总结+致谢）。
-5. 只输出 JSON 数组（字符串数组，与页面对应），不要输出任何其他文字。
+5. **页数严格一致**：输入共 {n} 页，你的输出数组必须恰好 {n} 个字符串元素，按输入顺序一一对应；目录页、章节过渡页也要写（可用一句承上启下的过渡语，禁止跳过或合并任何页）。
+6. 只输出 JSON 数组（字符串数组，与页面对应），不要输出任何其他文字。
 
 主题：{topic}
 语气：{tone}
@@ -67,14 +71,7 @@ def _llm_call_err(payload_prompt: str, timeout: int = 180) -> tuple[str | None, 
         return None, detail or str(e)[:200]
 
 
-def _llm_pages(topic: str, slides: List[Dict], tone: str) -> tuple[List[str] | None, str | None]:
-    content = json.dumps(
-        [{"title": x.get("title", ""), "bullets": x.get("bullets", [])} for x in slides],
-        ensure_ascii=False,
-    )
-    text, err = _llm_call_err(SCRIPT_PROMPT.format(topic=topic, tone=tone, pages=content))
-    if not text:
-        return None, err
+def _parse_llm_pages(text: str, n_slides: int) -> tuple[List[str] | None, str | None]:
     m = re.search(r"\[.*\]", text, re.S)
     if not m:
         return None, "AI 返回格式异常（未找到 JSON 数组）"
@@ -82,9 +79,34 @@ def _llm_pages(topic: str, slides: List[Dict], tone: str) -> tuple[List[str] | N
         arr = json.loads(m.group(0))
     except Exception:
         return None, "AI 返回格式异常（JSON 解析失败）"
-    if isinstance(arr, list) and len(arr) == len(slides):
+    if isinstance(arr, list) and len(arr) == n_slides:
         return [str(x).strip() for x in arr], None
-    return None, f"AI 返回页数不符（{len(arr) if isinstance(arr, list) else '?'} / {len(slides)}）"
+    return None, f"AI 返回页数不符（{len(arr) if isinstance(arr, list) else '?'} / {n_slides}）"
+
+
+def _llm_pages(topic: str, slides: List[Dict], tone: str) -> tuple[List[str] | None, str | None]:
+    content = json.dumps(
+        [{"title": x.get("title", ""), "bullets": x.get("bullets", [])} for x in slides],
+        ensure_ascii=False,
+    )
+    prompt = SCRIPT_PROMPT.format(topic=topic, tone=tone, pages=content, n=len(slides))
+    text, err = _llm_call_err(prompt)
+    if not text:
+        return None, err
+    pages, perr = _parse_llm_pages(text, len(slides))
+    if pages:
+        return pages, None
+    # 页数不符：带着错误原因重试一次（强调严格页数），仍失败才兜底
+    retry_prompt = (
+        f"你上次的输出{perr}。请重新完成任务：输出数组必须恰好 {len(slides)} 个元素，"
+        f"与输入页面按顺序一一对应，禁止跳过、合并或增删页面。\n\n{prompt}"
+    )
+    text2, err2 = _llm_call_err(retry_prompt)
+    if text2:
+        pages2, _ = _parse_llm_pages(text2, len(slides))
+        if pages2:
+            return pages2, None
+    return None, perr if perr else err2
 
 
 # ---------------------------------------------------------------------------

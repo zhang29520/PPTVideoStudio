@@ -10,6 +10,11 @@ function getBase() {
   return basePromise;
 }
 
+// 后端被看门狗重启后端口会变：收到 backend-ready 就重置缓存，下次请求重新取端口
+if (typeof window !== "undefined" && window.pvs?.onBackendReady) {
+  window.pvs.onBackendReady(() => { basePromise = null; });
+}
+
 async function req(path, options = {}) {
   const base = await getBase();
   const res = await fetch(base + path, {
@@ -63,19 +68,20 @@ export const api = {
   pptDownloadUrl: async (id) => `${await getBase()}/api/ppt/${id}/download`,
   thumbUrl: async (id, index) => `${await getBase()}/api/ppt/${id}/thumb/${index}.png`,
   pageUrl: async (id, index) => `${await getBase()}/api/ppt/${id}/page/${index}.png`,
-  // 应用内下载（不弹新窗口）：fetch → blob → a[download]
+  realStatus: (id) => req(`/api/ppt/${id}/real-status`),
+  // 应用内下载：直接触发 Electron 原生下载（主进程 will-download 钩子
+  // 自动保存到系统「下载」文件夹）。不走 fetch→blob：大视频文件不吃内存，
+  // 也不会因 fetch 超时/后端瞬时繁忙而报 Failed to fetch。
   downloadFile: async (url, filename) => {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`下载失败 (${res.status})`);
-    const blob = await res.blob();
-    const objUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = objUrl;
-    a.download = filename || "";
+    a.href = url;
+    if (filename) a.download = filename;
+    a.style.display = "none";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(() => URL.revokeObjectURL(objUrl), 30000);
+    // 原生下载是异步的，主进程完成后会推送 app:download-done
+    await new Promise((r) => setTimeout(r, 400));
   },
 
   // 解说词

@@ -380,11 +380,14 @@ def attach_images(topic: str, slides: list, progress=None, per_page_timeout: flo
             s["image"] = uri
             ok += 1
 
-    # 最终兜底：本地生成主题色抽象艺术图（自有版权，零风险，封面必配）
+    # 最终兜底：只有封面用本地抽象艺术图（自有版权零风险）；
+    # 内容页无合适配图则保持纯文字——由版式引擎排纯文字版面，
+    # 避免出现与内容无关的抽象色块图（观感差且千篇一律）
     for i, s in enumerate(slides):
         if not isinstance(s, dict) or s.get("image"):
             continue
-        seed = f"{topic}|{s.get('title', '')}|{i}"
-        s["image"] = _art_uri(seed, primary)
-        ok += 1
+        if i == 0:
+            seed = f"{topic}|{s.get('title', '')}|{i}"
+            s["image"] = _art_uri(seed, primary)
+            ok += 1
     return ok

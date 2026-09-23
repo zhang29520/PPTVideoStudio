@@ -89,19 +89,38 @@ def _parse_json_array(text: str | None):
         return None
 
 
+def _finish_sentence(s: str) -> str:
+    """把资料行收成完整句：剥枚举前缀、去掉句尾悬挂的逗号，尽量在最近的句号处收句。"""
+    s = re.sub(r"^0?\d+[、.\s]+", "", s).strip()          # 「01 」「1、」枚举前缀
+    s = s.rstrip("，、；：,,;:-· ")
+    if not s:
+        return s
+    if s[-1] in "。！？…":
+        return s
+    k = max(s.rfind("。"), s.rfind("！"), s.rfind("？"))
+    if k >= 15:
+        return s[:k + 1]
+    return s + "。"
+
+
 def _template_generate(topic: str, slides_count: int, audience: str, knowledge: str) -> List[Dict]:
     """内容型模板兜底：把抓取到的资料逐条分配到各页，没有资料就用主题词构句。"""
     facts: List[str] = []
+    seen_heads: set = set()
     for line in knowledge.splitlines():
         line = re.sub(r"^\d+\.\s*", "", line).strip()
         # 清理资料来源装饰：开头【标题】、日期前缀、来源符号
         line = re.sub(r"^【([^】]{0,40})】\s*", "", line)
         line = re.sub(r"\d{4}[-年/]\d{1,2}[-月/]\d{1,2}日?\s*[·•]?\s*", "", line)
         line = re.sub(r"^[\s·•\-]+", "", line).strip()
-        if 25 <= len(line) <= 90:
-            facts.append(line)
+        line = _finish_sentence(line)
+        if 25 <= len(line) <= 120:
+            head = line[:15]  # 近似去重：同话题资料常被多个来源重复抓取
+            if head not in seen_heads:
+                seen_heads.add(head)
+                facts.append(line)
 
-    slides: List[Dict] = [{"title": topic, "bullets": [f"面向{audience}", "汇报人：PPTVideoStudio"]}]
+    slides: List[Dict] = [{"title": topic, "bullets": [f"深度解析 · 面向{audience}"]}]
 
     middle = max(0, slides_count - 2)
     angle_titles = ["背景与现状", "核心概念解读", "主要方法与路径", "典型案例分析",
@@ -118,6 +137,13 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
         "这部分内容与整体目标密切相关",
         "接下来看实践中的具体做法",
     ]
+    lead_patterns = [
+        "从「{title}」看{topic}的关键事实与行动要点",
+        "「{title}」：理解{topic}的重要一环",
+        "本页聚焦{title}，拆解它与{topic}的关联",
+        "关于{title}，这些要点值得重点关注",
+        "{title}——{topic}中不可忽视的环节",
+    ]
     for i, title in enumerate(angle_pool):
         bullets: List[str] = []
         for _ in range(per_page):
@@ -125,13 +151,14 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
                 bullets.append(facts[fi])
                 fi += 1
         if not bullets:
-            bullets = [f"核心要点：围绕「{title}」，{topic}的核心做法与实施路径"]
+            bullets = [f"核心要点：围绕「{title}」，{topic}的核心做法与实施路径。"]
         if len(bullets) == 1:
             bullets.append(fillers[i % len(fillers)])
         # 结构化为「关键词：描述」，供版式引擎拆分渲染
         bullets = [_structure_line(b, i) for b in bullets[:4]]
-        slides.append({"title": title, "bullets": bullets,
-                       "lead": f"从「{title}」看{topic.replace('分析报告', '').replace('汇报', '')}的关键事实与行动要点"})
+        lead = lead_patterns[i % len(lead_patterns)].format(
+            title=title, topic=topic.replace("分析报告", "").replace("汇报", ""))
+        slides.append({"title": title, "bullets": bullets, "lead": _trim_lead(lead)})
 
     closing = [f"回顾「{topic}」的核心要点"]
     if facts:
@@ -139,6 +166,19 @@ def _template_generate(topic: str, slides_count: int, audience: str, knowledge: 
     closing += ["明确下一步行动", "感谢聆听"]
     slides.append({"title": "总结与展望", "bullets": closing})
     return slides[:slides_count]
+
+
+def _trim_lead(s: str, limit: int = 54) -> str:
+    """导语安全修剪：超长时在最近的标点处收句，绝不把词截断一半。"""
+    s = re.sub(r"\s+", "", s).strip()
+    if len(s) <= limit:
+        return s.rstrip("，、。；：与和及或")
+    cut = s[:limit]
+    # 从后往前找可收句的标点
+    for k in range(len(cut) - 1, 19, -1):
+        if cut[k] in "。；！？，、：":
+            return cut[:k].rstrip("，、与和及或") + "…"
+    return cut.rstrip("，、与和及或") + "…"
 
 
 def _structure_line(line: str, page_idx: int) -> str:
@@ -201,7 +241,7 @@ def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,
             s = {"title": title, "bullets": bullets}
             lead = str(it.get("lead", "")).strip()
             if lead:
-                s["lead"] = lead
+                s["lead"] = _trim_lead(lead)
             slides.append(s)
     if len(slides) < 2:
         return None, "AI 返回的内容页数不足"
