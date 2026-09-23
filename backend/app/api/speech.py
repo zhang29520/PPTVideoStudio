@@ -11,11 +11,14 @@ router = APIRouter()
 
 
 def _sync_notes(project: dict) -> None:
-    """把解说词写入每页演讲者备注，并重建 PPTX。"""
+    """把解说词写入每页演讲者备注，并重建 PPTX。
+
+    导入型项目（upload.pptx）绝不覆盖用户上传的原始文件。
+    """
     for i, s in enumerate(project["slides"]):
         if i < len(project["script"]):
             s["notes"] = project["script"][i]
-    if project.get("files", {}).get("pptx"):
+    if project.get("files", {}).get("pptx") and project["files"]["pptx"] != "upload.pptx":
         build_pptx(project["slides"], Path(store.project_dir(project["id"])) / project["files"]["pptx"])
 
 

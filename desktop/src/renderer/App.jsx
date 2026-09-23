@@ -386,10 +386,16 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
     }).catch(() => {});
   }, []);
 
-  // 打开已有项目时直接进入预览
+  // 打开已有项目时直接进入预览（并识别是否为导入的 PPT：原始画面不可编辑）
+  const [imported, setImported] = useState(false);
   useEffect(() => {
     if (!project?.id) return;
-    api.getSlides(project.id).then((d) => { setSlides(d.slides || []); if ((d.slides || []).length) setStep(3); }).catch(() => {});
+    Promise.all([api.getSlides(project.id), api.getProject(project.id)])
+      .then(([d, p]) => {
+        setSlides(d.slides || []);
+        setImported(p.files?.pptx === "upload.pptx");
+        if ((d.slides || []).length) setStep(3);
+      }).catch(() => {});
   }, [project?.id]);
 
   async function startGenerate() {
@@ -652,8 +658,8 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               projectId={project?.id}
               index={zoomIdx}
               total={slides.length}
-              slides={slides}
-              onSlidesSaved={(next) => { setSlides(next); setThumbTick((t) => t + 1); }}
+              slides={imported ? null : slides}
+              onSlidesSaved={imported ? null : (next) => { setSlides(next); setThumbTick((t) => t + 1); }}
               onClose={() => setZoomIdx(-1)}
               onNav={(i) => setZoomIdx(i)}
             />
@@ -677,6 +683,7 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
   const [progress, setProgress] = useState(null);
   const [thumbTick, setThumbTick] = useState(0);
   const [zoomIdx, setZoomIdx] = useState(-1);
+  const [imported, setImported] = useState(false);
   const loadedRef = useRef(false);   // 首次加载完成前不触发自动保存
   const saveTimer = useRef(null);
 
@@ -690,6 +697,7 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
     ]).then(([d, p]) => {
       setSlides(d.slides || []);
       setScript(p.script || []);
+      setImported(p.files?.pptx === "upload.pptx");
       loadedRef.current = true;
     }).catch(() => { loadedRef.current = true; });
     setThumbTick((t) => t + 1);
@@ -819,6 +827,8 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
           projectId={project?.id}
           index={zoomIdx}
           total={slides.length}
+          slides={imported ? null : slides}
+          onSlidesSaved={imported ? null : (next) => { setSlides(next); setThumbTick((t) => t + 1); }}
           onClose={() => setZoomIdx(-1)}
           onNav={(i) => setZoomIdx(i)}
         />
@@ -857,6 +867,12 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
   useEffect(() => {
     if (!project?.id) { setAudio([]); return; }
     setAudioUrls({});
+    // 恢复已生成的配音与音色设置（切面板回来不丢失）
+    api.getProject(project.id).then((p) => {
+      if (p.files?.audio?.length) setAudio(p.files.audio);
+      if (p.tts_settings?.voice) setVoice(p.tts_settings.voice);
+      if (p.tts_settings?.speed) setSpeed(p.tts_settings.speed);
+    }).catch(() => {});
   }, [project?.id]);
 
   useEffect(() => {
@@ -1012,6 +1028,17 @@ function VideoPanel({ project, goPanel }) {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState(false);
   const timer = useRef(null);
+
+  // 恢复已导出的视频入口（切面板回来不丢失）
+  useEffect(() => {
+    if (!project?.id) return;
+    api.getProject(project.id).then((p) => {
+      if (p.files?.video) {
+        api.videoDownloadUrl(project.id).then(setVideoUrl).catch(() => {});
+        setEngine("上次导出");
+      }
+    }).catch(() => {});
+  }, [project?.id]);
 
   async function poll(tid) {
     try {

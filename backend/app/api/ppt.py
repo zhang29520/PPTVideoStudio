@@ -18,12 +18,18 @@ THUMB_W, THUMB_H = 480, 270
 
 
 def _rebuild_pptx(project: dict) -> str:
-    """根据当前 slides 重建 PPTX，返回相对文件名。"""
+    """根据当前 slides 重建 PPTX，返回相对文件名。
+
+    导入型项目（upload.pptx）：绝不覆盖用户上传的原始文件，
+    重建结果写到 output.pptx 仅作备注/备份；原始画面渲染仍指向 upload.pptx。
+    """
     d = Path(store.project_dir(project["id"]))
+    is_import = project.get("files", {}).get("pptx") == "upload.pptx"
     out = d / "output.pptx"
     build_pptx(project["slides"], out, theme=project.get("theme"),
                effects=bool(project.get("effects")))
-    project["files"]["pptx"] = "output.pptx"
+    if not is_import:
+        project["files"]["pptx"] = "output.pptx"
     return "output.pptx"
 
 
@@ -50,7 +56,7 @@ def _real_pages(project: dict):
     pngs = sorted(out.glob("page_*.png"))
     if pngs and marker.exists():
         return pngs
-    from .services.pptx_render import render_pptx_real
+    from ..services.pptx_render import render_pptx_real
 
     res = render_pptx_real(pptx, out)
     if res:
