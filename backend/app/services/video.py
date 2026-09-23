@@ -17,6 +17,9 @@ from .render import render_slides
 
 RES_MAP = {"720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)}
 
+# 内置可商用背景音乐（本项目程序化生成，无第三方版权）
+BGM_PATH = Path(__file__).resolve().parent.parent / "assets" / "bgm_calm.mp3"
+
 
 def _run(cmd: List[str], timeout: int = 300) -> bool:
     try:
@@ -92,6 +95,7 @@ def compose_video(
     follow_transition: bool = False,
     theme: dict | None = None,
     effects: bool = False,
+    bgm: bool = True,
 ) -> Dict:
     """合成最终 MP4。返回 {video_path, srt_path, duration, pages, engine}。
 
@@ -124,10 +128,12 @@ def compose_video(
         rep(0.06, "正在渲染页面画面…")
         pngs = render_slides(slides, tmp / "png", theme=theme, html_timeout=45.0)
 
-    # 2. 字幕
+    # 2. 字幕 —— 关键：与每页段落的实际时长（配音+0.6s 缓冲）严格一致，
+    #    否则字幕随页数累积漂移，出现"解说讲到下一页了字幕还在上一页"
     rep(0.15, "正在生成字幕文件…")
     srt_path = out / f"{project_id}.srt"
-    build_srt(script_pages, durations, srt_path)
+    padded = [max(2.0, d + 0.6) for d in durations]
+    build_srt(script_pages, padded, srt_path)
 
     # 3. 每页段落
     rng = random.Random(project_id)  # 同项目每次生成动效一致
@@ -136,7 +142,7 @@ def compose_video(
     total = max(1, len(pngs))
     for i, png in enumerate(pngs):
         rep(0.15 + 0.65 * i / total, f"正在合成第 {i + 1}/{total} 页画面与配音…")
-        dur = max(2.0, durations[i] + 0.6)
+        dur = padded[i]
         seg = tmp / "seg" / f"seg_{i:03d}.mp4"
         # 转场时长：跟随 PPT 动效 or 全局；随机动效模式下每页微调
         eff_td = td
@@ -189,7 +195,26 @@ def compose_video(
     ]):
         raise RuntimeError("视频拼接失败（FFmpeg concat）")
 
-    # 5. 烧录字幕（可选，依赖 libass）
+    # 5. 背景音乐（可选）：整片铺一层轻音乐，音量压低不抢解说，结尾淡出
+    total_dur = sum(padded)
+    if bgm and BGM_PATH.exists():
+        rep(0.86, "正在混入背景音乐…")
+        fade_st = max(0.0, total_dur - 2.5)
+        bgm_mixed = tmp / "bgm_mixed.mp4"
+        ok = _run([
+            "ffmpeg", "-y", "-i", str(merged),
+            "-stream_loop", "-1", "-i", str(BGM_PATH),
+            "-filter_complex",
+            (f"[1:a]volume=0.16,afade=t=out:st={fade_st:.2f}:d=2.5[bg];"
+             f"[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0[a]"),
+            "-map", "0:v", "-map", "[a]",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+            str(bgm_mixed),
+        ], timeout=300)
+        if ok and bgm_mixed.exists():
+            merged = bgm_mixed
+
+    # 6. 烧录字幕（可选，依赖 libass）
     rep(0.88, "正在处理字幕与最终封装…")
     final = out / f"{project_id}.mp4"
     if subtitle and _has_subtitles_filter():
@@ -204,5 +229,4 @@ def compose_video(
     else:
         shutil.copy(merged, final)
 
-    total = sum(max(2.0, d + 0.6) for d in durations)
-    return {"video_path": str(final), "srt_path": str(srt_path), "duration": total, "pages": len(pngs), "engine": engine}
+    return {"video_path": str(final), "srt_path": str(srt_path), "duration": total_dur, "pages": len(pngs), "engine": engine}

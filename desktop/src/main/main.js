@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, shell, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
@@ -268,6 +268,14 @@ ipcMain.handle("app:openExternal", (_e, url) => {
 });
 let updateCache = null;
 app.whenReady().then(async () => {
+  // 关键：本机若开了系统代理（127.0.0.1），会把对本地后端的请求也拦成 502，
+  // 导致试听/缩略图/接口全部失败。强制本地地址直连。
+  try {
+    await session.defaultSession.setProxy({
+      mode: "system",
+      proxyBypassRules: "localhost,127.0.0.1,<local>",
+    });
+  } catch {}
   createWindow();
   startBackend();
   startRenderWorker();

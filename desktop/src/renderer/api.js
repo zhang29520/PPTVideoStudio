@@ -80,6 +80,8 @@ export const api = {
   // 解说词
   generateSpeech: (id, tone) =>
     req(`/api/speech/generate/${id}`, { method: "POST", body: JSON.stringify({ tone }) }),
+  generateSpeechOne: (id, index) =>
+    req(`/api/speech/generate-one/${id}`, { method: "POST", body: JSON.stringify({ index }) }),
   saveSpeech: (id, pages) =>
     req(`/api/speech/${id}`, { method: "PUT", body: JSON.stringify({ pages }) }),
 

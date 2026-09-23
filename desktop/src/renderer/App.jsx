@@ -45,6 +45,8 @@ function Btn({ children, onClick, disabled, kind = "primary", style = {}, icon }
     opacity: disabled ? 0.45 : 1,
     display: "inline-flex",
     alignItems: "center",
+    verticalAlign: "middle",
+    lineHeight: 1.4,
     gap: 8,
   };
   const kinds = {
@@ -57,6 +59,19 @@ function Btn({ children, onClick, disabled, kind = "primary", style = {}, icon }
       {icon && <Icon d={ICONS[icon]} size={15} />}
       {children}
     </button>
+  );
+}
+
+/* 触发文件选择的按钮：用 ref 直接触发 input，不用 <label> 包 <button>
+   （label 里的 button 属于交互元素，点击不会转发给 input，表现为"点了没反应"） */
+function FileBtn({ children, accept, onFile, kind = "ghost", icon, disabled }) {
+  const ref = useRef(null);
+  return (
+    <>
+      <Btn kind={kind} icon={icon} disabled={disabled} onClick={() => ref.current?.click()}>{children}</Btn>
+      <input type="file" accept={accept} ref={ref} style={{ display: "none" }}
+        onChange={(e) => { if (e.target.files?.[0]) onFile(e); e.target.value = ""; }} />
+    </>
   );
 }
 
@@ -257,14 +272,12 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   const refresh = useCallback(() => api.listProjects().then(setProjects).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh, project?.id]);
 
-  // 读取已保存的 AI 配置列表，默认选中标记「默认」的那个
+  // 读取已保存的 AI 配置列表；默认引擎固定为「内置引擎」，AI 配置只是可选增强
   useEffect(() => {
     api.getSettings().then((st) => {
       const list = (st.ai_profiles || []).filter((p) => p.base && p.model);
       setAiList(list);
       setNoLLM(list.length === 0);
-      const def = list.find((p) => p.id === st.default_profile) || list[0];
-      setEngine(def ? def.id : "builtin");
     }).catch(() => {});
   }, []);
 
@@ -358,6 +371,13 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
     setMsg("");
   }
 
+  // 返回首页重新开始：清空当前项目回到输入主题
+  function restartAll() {
+    setProject(null); setSlides([]); setTopic(""); setStep(1);
+    setMsg(""); setProgress(null); setBusy(false);
+    onProjectChanged?.();
+  }
+
   const stepDots = (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: 12, color: MUTED }}>
       <b onClick={() => { if (!busy) { setProject(null); setSlides([]); setStep(1); } }} title="点击返回输入主题" style={{
@@ -395,16 +415,10 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               onKeyDown={(e) => e.key === "Enter" && topic.trim() && setStep(2)}
             />
           </div>
-          <div style={{ display: "flex", gap: 12, marginTop: 18 }}>
+          <div style={{ display: "flex", gap: 12, marginTop: 18, flexWrap: "wrap", alignItems: "center" }}>
             <Btn icon="arrowR" disabled={!topic.trim()} onClick={() => setStep(2)}>生成 PPT</Btn>
-            <label style={{ cursor: "pointer" }}>
-              <Btn kind="ghost" icon="upload" disabled={busy}>上传 PPT（.pptx）</Btn>
-              <input type="file" accept=".pptx" onChange={importPpt} style={{ display: "none" }} />
-            </label>
-            <label style={{ cursor: "pointer" }}>
-              <Btn kind="ghost" icon="upload" disabled={busy}>上传 Word，AI 生成 PPT（.docx）</Btn>
-              <input type="file" accept=".docx" onChange={importDocx} style={{ display: "none" }} />
-            </label>
+            <FileBtn icon="upload" accept=".pptx" disabled={busy} onFile={importPpt}>上传 PPT（.pptx）</FileBtn>
+            <FileBtn icon="upload" accept=".docx" disabled={busy} onFile={importDocx}>上传 Word，AI 生成 PPT（.docx）</FileBtn>
           </div>
           <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.8, marginTop: 12 }}>
             上传的 PPT 导出视频时直接使用你 PPT 的原始页面（需本机装有 Office 或 WPS）；上传 Word 后自动分析文档结构生成 PPT 页面
@@ -467,13 +481,13 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
           <div style={labelStyle}>AI 引擎</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <Seg
-              options={[...aiList.map((p) => [p.id, `${p.name} · ${p.model}`]), ["builtin", "内置引擎（免费）"]]}
+              options={[["builtin", "内置 AI（免费·免配置）"], ...aiList.map((p) => [p.id, `${p.name} · ${p.model}`])]}
               value={engine}
               onChange={setEngine}
             />
             {noLLM && (
               <span style={{ fontSize: 12, color: MUTED }}>
-                未配置 AI，在「高级设置」里添加后可选
+                内置 AI 无需任何配置即可用；配置大模型后内容质量更高
               </span>
             )}
           </div>
@@ -497,7 +511,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               marginTop: 14, padding: "10px 14px", borderRadius: 10, fontSize: 12.5, lineHeight: 1.7,
               background: "#FFF7E8", border: "1px solid #F2DDB4", color: "#8A6116",
             }}>
-              💡 未配置 AI：当前使用免费内置引擎，内容为基础水平。在「高级设置 → ② 解说词 AI」里填入任意大模型 API（DeepSeek / 智谱 GLM / Kimi 等，注册即送额度），内容质量会大幅提升。
+              💡 内置 AI 完全免费、无需配置，开箱即用。想要更强的内容质量，可在「高级设置 → ① PPT 生成 AI」里填入任意大模型 API（DeepSeek / 智谱 GLM / Kimi 等，注册即送额度）。
             </div>
           )}
           <Progress progress={progress} />
@@ -513,15 +527,7 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               <span style={{ fontSize: 12, color: MUTED }}>点击任意一页可放大预览</span>
               <span style={{ flex: 1 }} />
               <Btn kind="ghost" icon="arrowL" disabled={busy} onClick={() => setStep(2)}>← 返回修改</Btn>
-              <label style={{ cursor: "pointer" }}>
-                <Btn kind="ghost" icon="upload" disabled={busy}>上传 PPT</Btn>
-                <input type="file" accept=".pptx" onChange={importPpt} style={{ display: "none" }} />
-              </label>
-              <label style={{ cursor: "pointer" }}>
-                <Btn kind="ghost" icon="upload" disabled={busy}>上传 Word</Btn>
-                <input type="file" accept=".docx" onChange={importDocx} style={{ display: "none" }} />
-              </label>
-              <Btn kind="ghost" onClick={() => { setProject(null); setSlides([]); setTopic(""); setStep(1); }}>＋ 新建 PPT</Btn>
+              <Btn kind="ghost" onClick={restartAll}>⟲ 返回首页</Btn>
               <Btn kind="ghost" icon="save" onClick={savePpt} disabled={busy || !slides.length}>保存 PPT</Btn>
               <Btn icon="arrowR" onClick={() => goPanel("script")} disabled={!slides.length}>生成解说词，进入下一步 →</Btn>
             </div>
@@ -554,19 +560,39 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
   const [slides, setSlides] = useState([]);
   const [script, setScript] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [busyOne, setBusyOne] = useState(-1);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState(false);
   const [progress, setProgress] = useState(null);
   const [thumbTick, setThumbTick] = useState(0);
   const [zoomIdx, setZoomIdx] = useState(-1);
+  const loadedRef = useRef(false);   // 首次加载完成前不触发自动保存
+  const saveTimer = useRef(null);
 
   useEffect(() => {
     if (!project?.id) return;
+    loadedRef.current = false;
     setMsg(""); setProgress(null);
-    api.getSlides(project.id).then((d) => setSlides(d.slides || [])).catch(() => {});
-    api.getProject(project.id).then((p) => setScript(p.script || [])).catch(() => {});
+    Promise.all([
+      api.getSlides(project.id),
+      api.getProject(project.id),
+    ]).then(([d, p]) => {
+      setSlides(d.slides || []);
+      setScript(p.script || []);
+      loadedRef.current = true;
+    }).catch(() => { loadedRef.current = true; });
     setThumbTick((t) => t + 1);
   }, [project?.id]);
+
+  // 自动保存：停止输入 800ms 后静默保存，无需手动点按钮
+  useEffect(() => {
+    if (!loadedRef.current || !project?.id || !script.length) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      api.saveSpeech(project.id, script).catch(() => {});
+    }, 800);
+    return () => clearTimeout(saveTimer.current);
+  }, [script, project?.id]);
 
   const updScript = (i, val) => {
     const next = [...script];
@@ -584,18 +610,21 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
       setScript(r.pages);
       if (r.warning) setMsg("AI 调用失败，已用内置引擎兜底：" + r.warning), setErr(true);
       else setMsg(r.source === "llm" ? "解说词已根据每页内容生成（AI）✔" : "已按每页内容生成解说词（内置引擎）✔ 接入 LLM 可获得更自然的讲稿");
+      onScriptReady();
     } catch (e) { setMsg("失败：" + e.message); setErr(true); }
     finally { setBusy(false); setProgress(null); }
   }
 
-  async function saveScript() {
-    setBusy(true); setMsg(""); setErr(false);
+  // 只重新生成某一页的解说词
+  async function genOne(i) {
+    setBusyOne(i); setMsg(""); setErr(false);
     try {
-      await api.saveSpeech(project.id, script);
-      setMsg("解说词已保存 ✔");
+      const r = await api.generateSpeechOne(project.id, i);
+      updScript(i, r.page);
+      setMsg(`第 ${i + 1} 页解说词已重新生成 ✔`);
       onScriptReady();
-    } catch (e) { setMsg("保存失败：" + e.message); setErr(true); }
-    finally { setBusy(false); }
+    } catch (e) { setMsg("重新生成失败：" + e.message); setErr(true); }
+    finally { setBusyOne(-1); }
   }
 
   if (!project?.id) return <p style={{ color: MUTED, fontSize: 13 }}>请先在首页生成或导入 PPT</p>;
@@ -604,14 +633,13 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
     <>
       <h1 style={{ margin: 0, fontSize: 21 }}>解说词</h1>
       <p style={{ color: MUTED, fontSize: 13, margin: "4px 0 20px" }}>
-        基于每页实际内容撰写 · 可逐页修改 · 保存后写入 PPT 演讲者备注
+        基于每页实际内容撰写 · 修改自动保存并写入 PPT 备注 · 每页可单独 AI 重新生成
       </p>
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
         <Btn kind="ghost" icon="arrowL" onClick={() => goPanel("home")}>← 返回首页</Btn>
         <Btn kind="soft" icon="refresh" onClick={genScript} disabled={busy || !slides.length}>
           {script.some((s) => (s || "").trim()) ? "AI 重新生成全部" : "AI 生成全部解说词"}
         </Btn>
-        <Btn kind="ghost" icon="save" onClick={saveScript} disabled={busy || !script.length}>保存解说词</Btn>
         <span style={{ flex: 1 }} />
         {progress && <div style={{ width: 180 }}><Progress progress={progress} /></div>}
       </div>
@@ -631,8 +659,22 @@ function ScriptPanel({ project, goPanel, onScriptReady }) {
                 onChange={(e) => updScript(i, e.target.value)}
                 rows={3}
                 style={{ ...inputStyle, resize: "vertical" }}
-                placeholder="本页解说词（点击上方 AI 重新生成，或直接输入）"
+                placeholder="本页解说词（可点击右侧 AI 重新生成，或直接输入，修改自动保存）"
               />
+              <div style={{ marginTop: 6, textAlign: "right" }}>
+                <button
+                  onClick={() => genOne(i)}
+                  disabled={busyOne >= 0 || busy}
+                  style={{
+                    border: `1px solid ${busyOne === i ? ORANGE : LINE}`, borderRadius: 8,
+                    background: busyOne === i ? ORANGE_SOFT : "#fff", color: busyOne === i ? ORANGE : INK,
+                    fontSize: 12, padding: "5px 12px", cursor: busyOne >= 0 || busy ? "wait" : "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  {busyOne === i ? "AI 生成中…" : "⟲ AI 重新生成本页"}
+                </button>
+              </div>
             </div>
           </div>
         ))}
@@ -745,6 +787,10 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
       <p style={{ color: MUTED, fontSize: 13, margin: "4px 0 20px" }}>
         Edge-TTS 逐页合成 · 失败页自动静音兜底
       </p>
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <Btn kind="ghost" icon="arrowL" onClick={() => goPanel("script")}>← 返回上一步</Btn>
+        <Btn kind="ghost" onClick={() => goPanel("home")}>⟲ 返回首页</Btn>
+      </div>
       <div style={cardStyle}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, color: MUTED }}>音色</span>
@@ -798,13 +844,14 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
 /* ============================================================
    栏目四：生成视频
 ============================================================ */
-function VideoPanel({ project }) {
+function VideoPanel({ project, goPanel }) {
   const [resolution, setResolution] = useState("1080p");
   const [fps, setFps] = useState(30);
   const [subtitle, setSubtitle] = useState(true);
   const [transition, setTransition] = useState(0.5);
   const [followFx, setFollowFx] = useState(false);
   const [fx, setFx] = useState(true);   // 随机镜头动效（Ken Burns）
+  const [bgm, setBgm] = useState(true); // 内置背景音乐
   const [progress, setProgress] = useState(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [engine, setEngine] = useState("");
@@ -829,7 +876,7 @@ function VideoPanel({ project }) {
   async function exportVideo() {
     setVideoUrl(""); setEngine(""); setMsg(""); setErr(false);
     try {
-      const r = await api.exportVideo(project.id, { resolution, fps, subtitle, transition, follow_transition: followFx, effects: fx });
+      const r = await api.exportVideo(project.id, { resolution, fps, subtitle, transition, follow_transition: followFx, effects: fx, bgm });
       setProgress({ status: "running", progress: 0.02, message: "任务已提交" });
       timer.current = setInterval(() => poll(r.taskId), 2000);
     } catch (e) { setMsg("提交失败：" + e.message); setErr(true); }
@@ -842,8 +889,12 @@ function VideoPanel({ project }) {
     <>
       <h1 style={{ margin: 0, fontSize: 21 }}>生成视频</h1>
       <p style={{ color: MUTED, fontSize: 13, margin: "4px 0 20px" }}>
-        渲染画面 + 逐页合成 + 烧录字幕
+        渲染画面 + 逐页合成 + 烧录字幕 · 每页时长与该页解说词严格同步
       </p>
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <Btn kind="ghost" icon="arrowL" onClick={() => goPanel("audio")}>← 返回上一步</Btn>
+        <Btn kind="ghost" onClick={() => goPanel("home")}>⟲ 返回首页</Btn>
+      </div>
       <div style={cardStyle}>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ fontSize: 13, color: MUTED }}>分辨率</span>
@@ -856,6 +907,13 @@ function VideoPanel({ project }) {
         <div style={{ display: "flex", gap: 22, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
           <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
             <input type="checkbox" checked={subtitle} onChange={(e) => setSubtitle(e.target.checked)} style={{ accentColor: ORANGE, width: 16, height: 16 }} /> 烧录字幕
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={bgm} onChange={(e) => setBgm(e.target.checked)} style={{ accentColor: ORANGE, width: 16, height: 16 }} />
+            背景音乐（推荐）
+            <span style={{ fontSize: 11, color: MUTED, background: "#F1EDE8", padding: "2px 8px", borderRadius: 99 }}>
+              内置轻音乐 · 可商用 · 自动压低音量不抢解说
+            </span>
           </label>
           <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
             <input type="checkbox" checked={fx} onChange={(e) => setFx(e.target.checked)} style={{ accentColor: ORANGE, width: 16, height: 16 }} />
@@ -1333,7 +1391,7 @@ export default function App() {
                 onAudioReady={() => { setBadge("audio", "已完成 ✔"); setBadge("video", "待导出"); }} />
             )}
             {panel === "video" && (
-              <VideoPanel project={project} />
+              <VideoPanel project={project} goPanel={goPanel} />
             )}
             {panel === "settings" && <SettingsPanel />}
           </BackendGate>

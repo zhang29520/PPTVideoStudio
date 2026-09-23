@@ -73,15 +73,18 @@ def _points(bullets) -> List[Dict]:
 _NUM_RE = re.compile(r"\d+\.?\d*\s*(?:%|％|亿|万|千|倍|[xX×]|美元|元|人|家|城)")
 
 
-def _pick_layout(pts: List[Dict], image: str | None) -> str:
-    """版式自动选择：数据强调 / 左文右图 / 2×2 卡片 / 列表。"""
+def _pick_layout(pts: List[Dict], image: str | None, idx: int = 1) -> str:
+    """版式自动选择：数据强调 / 左文右图 / 左图右文 / 上图下卡 / 2×2 卡片 / 列表。
+    有配图时三种图文版式按页序轮换，避免整份 PPT 清一色左字右图。"""
     if not pts:
         return "list"
-    if image:
-        return "split"
     n_num = sum(1 for p in pts if _NUM_RE.search(p["v"]) or _NUM_RE.search(p["k"]))
     if n_num >= 2 and len(pts) <= 4:
         return "stats"
+    if image:
+        if len(pts) >= 5:
+            return "grid"
+        return ("split", "splitrev", "imgtop")[idx % 3]
     if len(pts) >= 4:
         return "grid"
     return "list"
@@ -344,15 +347,30 @@ def _content_slide(idx: int, total: int, topic: str, title: str, bullets,
     head = (f'<div class="slide-title">{html.escape(title)}</div>'
             f'{lead_html}'
             f'<div class="head-bar"></div>')
-    layout = _pick_layout(pts, image)
+    layout = _pick_layout(pts, image, idx)
 
-    if layout == "split":
+    if layout in ("split", "splitrev"):
         rows = "".join(_pt_card(j, p) for j, p in enumerate(pts))
+        rev_cls = " rev" if layout == "splitrev" else ""
+        img_first = (f'<div class="img-wrap"><img src="{image}" alt=""></div>'
+                     if layout == "splitrev" else "")
+        img_last = ("" if layout == "splitrev"
+                    else f'<div class="img-wrap"><img src="{image}" alt=""></div>')
         body = f"""
-      <div class="content-inner with-img">
+      <div class="content-inner with-img{rev_cls}">
         {head}
+        {img_first}
         <div class="txt-col"><div class="grid">{rows}</div></div>
-        <div class="img-wrap"><img src="{image}" alt=""></div>
+        {img_last}
+      </div>"""
+    elif layout == "imgtop":
+        rows = "".join(_pt_card(j, p) for j, p in enumerate(pts))
+        cols2 = " cols2" if len(pts) >= 4 else ""
+        body = f"""
+      <div class="content-inner imgtop">
+        {head}
+        <div class="top-img"><img src="{image}" alt=""></div>
+        <div class="grid{cols2}">{rows}</div>
       </div>"""
     elif layout == "stats":
         stats = []
@@ -437,6 +455,14 @@ body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};backgro
 .slide.active{{display:flex;}}
 /* ---------- 封面 / 结尾 ---------- */
 .cover,.closing{{justify-content:center;}}
+/* 结尾页：不再裸黑底，跟封面同系渐变 + 白字卡片 */
+.closing{{background:linear-gradient(135deg,{primary} 0%,{_shade(primary, 0.38)} 100%);color:#fff;}}
+.closing .kicker{{color:rgba(255,255,255,.78);}}
+.closing .rule{{background:rgba(255,255,255,.45);}}
+.closing .pc{{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.18);border-radius:16px;}}
+.closing .pc .pk{{color:#fff;}}
+.closing .pc .pv{{color:rgba(255,255,255,.80);}}
+.closing .ghost{{color:rgba(255,255,255,.08);}}
 .cover-inner{{padding:0 160px;position:relative;z-index:2;}}
 .kicker{{font-size:22px;letter-spacing:10px;color:{_alpha(primary, 0.75)};font-weight:600;margin-bottom:34px;}}
 .cover-title{{font-size:92px;font-weight:800;color:#fff;line-height:1.22;max-width:1400px;}}
@@ -483,14 +509,21 @@ body{{width:{W}px;height:{H}px;overflow:hidden;font-family:{_FONT_STACK};backgro
 .stats.four .n{{font-size:74px;}}
 .stats.four .k{{font-size:27px;margin-top:16px;}}
 .stats.four .v{{font-size:22px;}}
-/* ---------- 版式：左文右图 ---------- */
+/* ---------- 版式：左文右图 / 左图右文 / 上图下卡 ---------- */
 .cover-img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}}
 .cover-shade{{position:absolute;inset:0;z-index:1;
     background:linear-gradient(95deg,rgba(8,14,24,.88) 0%,rgba(8,14,24,.62) 48%,rgba(8,14,24,.28) 100%);}}
 .cover.has-img .deco1,.cover.has-img .deco2{{display:none;}}
 .content-inner.with-img{{display:grid;grid-template-columns:1.05fr .95fr;gap:52px;
     align-content:start;}}
+.content-inner.with-img.rev{{grid-template-columns:.95fr 1.05fr;}}
 .content-inner.with-img .slide-title,.content-inner.with-img .head-bar{{grid-column:1 / -1;}}
+.content-inner.imgtop{{display:flex;flex-direction:column;}}
+.top-img{{height:300px;border-radius:20px;overflow:hidden;margin-bottom:32px;
+    box-shadow:0 14px 40px rgba(20,32,52,.16);border:1px solid rgba(120,140,170,.16);
+    flex-shrink:0;}}
+.top-img img{{width:100%;height:100%;object-fit:cover;display:block;}}
+.grid.cols2{{grid-template-columns:1fr 1fr;}}
 .txt-col{{display:flex;flex-direction:column;gap:22px;}}
 .txt-col .grid{{gap:18px;}}
 .txt-col .card{{padding:22px 30px;}}

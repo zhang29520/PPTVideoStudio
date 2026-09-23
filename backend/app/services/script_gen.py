@@ -163,6 +163,68 @@ def _template_pages(topic: str, slides: List[Dict], tone: str) -> List[str]:
     return pages
 
 
+ONE_PAGE_PROMPT = """你是一名专业的演讲撰稿人。下面是一份 PPT 中某一页的内容，请为这一页写口语讲解词。
+
+硬性要求：
+1. 讲解词必须**基于该页实际内容**（标题+要点）展开：把要点改写成自然的口语，补充解释或衔接；禁止只复读标题，禁止无关套话。
+2. 60~150 字，口语化，可直接朗读。
+{ctx}3. 只输出讲解词正文，不要输出任何其他文字（不要序号、不要标题、不要引号）。
+
+主题：{topic}
+语气：{tone}
+这一页是第 {index} 页（共 {total} 页，{pos}）。
+
+页面内容：
+{page}"""
+
+
+def generate_one_script(topic: str, slide: Dict, index: int, total: int,
+                        tone: str = "专业", prev_text: str = "") -> str:
+    """为单独一页生成解说词：LLM 优先，模板兜底。index 从 0 计。"""
+    pos = "开场页" if index == 0 else ("收尾页" if index == total - 1 else "内容页")
+    ctx = ""
+    if prev_text:
+        ctx = f"上一页解说词结尾是「…{prev_text[-40:]}」，请自然衔接。\n"
+    page_json = json.dumps(
+        {"title": slide.get("title", ""), "bullets": slide.get("bullets", [])},
+        ensure_ascii=False,
+    )
+    prompt = ONE_PAGE_PROMPT.format(
+        ctx=ctx, topic=topic, tone=tone, index=index + 1, total=total,
+        pos=pos, page=page_json,
+    )
+    text, _err = _llm_call_err(prompt, timeout=60)
+    if text:
+        cleaned = text.strip().strip('"“”「」').strip()
+        cleaned = re.sub(r"^\d+[.、]\s*", "", cleaned)  # 去掉 AI 可能加的序号
+        if cleaned:
+            return cleaned
+    # 模板兜底
+    return _template_single(topic, slide, index, total)
+
+
+def _template_single(topic: str, slide: Dict, index: int, total: int) -> str:
+    """单页模板兜底（与整篇模板同一套口播规则）。"""
+    title = (slide.get("title", "") or "").strip()
+    bullets = [b for b in (slide.get("bullets", []) or []) if str(b).strip()]
+    bullets = [b for b in bullets if not _is_junk_spoken(str(b))]
+    if index == 0:
+        if bullets:
+            preview = "、".join(_clean_spoken(str(b)).split("：")[0] for b in bullets[:3])
+            text = f"大家好，欢迎来到今天的分享。今天的主题是「{topic}」。我们会从{preview}等方面展开。"
+        else:
+            text = f"大家好，欢迎来到今天的分享。今天的主题是「{topic}」，下面正式开始。"
+    elif index == total - 1:
+        key = _clean_spoken(str(bullets[0])) if bullets else title
+        tail = _bullet_to_sentence(key) if key else ""
+        text = f"最后做个总结。{tail}以上就是今天分享的全部内容，感谢大家的聆听。"
+    else:
+        parts = [_bullet_to_sentence(str(b)) for b in bullets[:3]]
+        body = "".join(parts) if parts else f"这一页讲的是{title}。"
+        text = f"接下来看{title}。{body}"
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def generate_script(topic: str, slides: List[Dict], tone: str = "专业", progress=None) -> Dict:
     rep = progress or (lambda stage, ratio: None)
 

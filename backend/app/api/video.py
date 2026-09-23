@@ -51,6 +51,7 @@ def export_video(project_id: str, payload: dict = None):
             follow_transition=bool(payload.get("follow_transition", False)),
             theme=project.get("theme"),
             effects=bool(payload.get("effects", project.get("effects", False))),
+            bgm=bool(payload.get("bgm", True)),
         )
         project["files"]["video"] = Path(result["video_path"]).name
         project["files"]["srt"] = Path(result["srt_path"]).name
