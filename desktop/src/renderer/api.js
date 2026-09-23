@@ -51,6 +51,14 @@ export const api = {
     if (!res.ok) throw new Error((await res.json()).detail || "导入失败");
     return res.json();
   },
+  importDocx: async (file) => {
+    const base = await getBase();
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(base + "/api/ppt/import-docx", { method: "POST", body: fd });
+    if (!res.ok) throw new Error((await res.json()).detail || "Word 解析失败");
+    return res.json();
+  },
   pptDownloadUrl: async (id) => `${await getBase()}/api/ppt/${id}/download`,
   thumbUrl: async (id, index) => `${await getBase()}/api/ppt/${id}/thumb/${index}.png`,
   pageUrl: async (id, index) => `${await getBase()}/api/ppt/${id}/page/${index}.png`,

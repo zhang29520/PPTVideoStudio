@@ -7,9 +7,10 @@ from fastapi.responses import FileResponse, Response
 
 from .. import store, tasks
 from ..services.images import attach_images
-from ..services.outline import generate_outline
+from ..services.outline import analyze_topic, generate_outline
 from ..services.ppt_builder import build_pptx, parse_pptx
 from ..services.render import render_slides
+from ..services.docx_import import docx_to_slides
 
 router = APIRouter()
 
@@ -40,6 +41,8 @@ def generate_ppt(project_id: str, payload: dict = None):
     theme = {
         "primary": payload.get("color") or "#1a3a5c",
         "style": payload.get("style") or "简约商务",
+        # 主题分析：自动匹配封面设计模板（科技/政务/商务/清新/文化/暗黑）
+        "design": payload.get("design") or analyze_topic(project["topic"]),
     }
     project["theme"] = theme
     use_llm = payload.get("engine", "ai") != "builtin"
@@ -114,6 +117,36 @@ async def import_ppt(file: UploadFile = File(...)):
         "projectId": project["id"],
         "slides": project["slides"],
         "message": f"导入成功，共 {len(project['slides'])} 页",
+    }
+
+
+@router.post("/api/ppt/import-docx")
+async def import_docx(file: UploadFile = File(...)):
+    """上传 Word：AI 分析文档结构 → 自动生成 PPT 页面。"""
+    if not file.filename.lower().endswith((".docx", ".doc")):
+        raise HTTPException(400, "仅支持 .docx 文件")
+    project = store.create_project(topic=file.filename.rsplit(".", 1)[0])
+    d = Path(store.project_dir(project["id"]))
+    upload = d / "upload.docx"
+    upload.write_bytes(await file.read())
+    try:
+        slides = docx_to_slides(upload)
+    except Exception as e:
+        raise HTTPException(400, f"Word 解析失败：{e}")
+    if len(slides) < 2:
+        raise HTTPException(400, "文档内容太少，无法生成 PPT（请确认有正文段落）")
+    project["slides"] = slides
+    project["theme"] = {
+        "primary": "#1a3a5c",
+        "style": "简约商务",
+        "design": analyze_topic(project["topic"]),
+    }
+    project["docx_source"] = True
+    store.save_project(project)
+    return {
+        "projectId": project["id"],
+        "slides": slides,
+        "message": f"Word 解析成功，已按文档结构生成 {len(slides)} 页",
     }
 
 

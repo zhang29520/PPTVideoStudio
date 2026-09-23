@@ -322,6 +322,25 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
     } finally { setBusy(false); e.target.value = ""; }
   }
 
+  async function importDocx(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBusy(true); setMsg(""); setErr(false); setProgress(null);
+    try {
+      const p = await api.importDocx(f);
+      const pid = p.projectId;
+      setProject({ id: pid, topic: f.name.replace(/\.docx$/i, "") });
+      const d = await api.getSlides(pid);
+      setSlides(d.slides || []);
+      setThumbTick((t) => t + 1);
+      setStep(3);
+      setMsg(`Word 解析成功，已按文档结构生成 ${p.slides.length} 页，可在下方放大检查 ✔`);
+      refresh();
+    } catch (e2) {
+      setMsg("Word 解析失败：" + e2.message); setErr(true);
+    } finally { setBusy(false); e.target.value = ""; }
+  }
+
   async function savePpt() {
     setBusy(true); setMsg(""); setErr(false);
     try {
@@ -380,9 +399,13 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               <Btn kind="ghost" icon="upload" disabled={busy}>上传 PPT（.pptx）</Btn>
               <input type="file" accept=".pptx" onChange={importPpt} style={{ display: "none" }} />
             </label>
+            <label style={{ cursor: "pointer" }}>
+              <Btn kind="ghost" icon="upload" disabled={busy}>上传 Word，AI 生成 PPT（.docx）</Btn>
+              <input type="file" accept=".docx" onChange={importDocx} style={{ display: "none" }} />
+            </label>
           </div>
           <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.8, marginTop: 12 }}>
-            上传的 PPT 导出视频时直接使用你 PPT 的原始页面（需本机装有 Office 或 WPS）
+            上传的 PPT 导出视频时直接使用你 PPT 的原始页面（需本机装有 Office 或 WPS）；上传 Word 后自动分析文档结构生成 PPT 页面
           </div>
           {projects.length > 0 && (
             <div style={{ marginTop: 22, borderTop: `1px solid ${LINE}`, paddingTop: 16 }}>
@@ -481,6 +504,10 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
               <label style={{ cursor: "pointer" }}>
                 <Btn kind="ghost" icon="upload" disabled={busy}>上传 PPT</Btn>
                 <input type="file" accept=".pptx" onChange={importPpt} style={{ display: "none" }} />
+              </label>
+              <label style={{ cursor: "pointer" }}>
+                <Btn kind="ghost" icon="upload" disabled={busy}>上传 Word</Btn>
+                <input type="file" accept=".docx" onChange={importDocx} style={{ display: "none" }} />
               </label>
               <Btn kind="ghost" onClick={() => { setProject(null); setSlides([]); setTopic(""); setStep(1); }}>＋ 新建 PPT</Btn>
               <Btn kind="ghost" icon="save" onClick={savePpt} disabled={busy || !slides.length}>保存 PPT</Btn>

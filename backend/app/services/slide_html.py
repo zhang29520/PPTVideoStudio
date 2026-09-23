@@ -192,16 +192,94 @@ _STYLE_CSS = {
 
 _DEFAULT_STYLE_CSS = _STYLE_CSS["简约商务"]
 
+# ---------- 封面设计模板（主题分析自动匹配，对标商业模板库的封面构图） ----------
 
-def _cover_slide(topic: str, bullets: List[Dict], image: str | None = None) -> str:
+_COVER_DESIGN = {
+    # 科技蓝：深空渐变 + 网格 + 光晕环
+    "tech": """
+        .slide.cover.design-tech{background:linear-gradient(115deg,#081221 0%,{p_dark} 58%,{p} 145%)!important;}
+        .slide.cover.design-tech .deco1,.slide.cover.design-tech .deco2{display:none;}
+        .slide.cover.design-tech:before{content:'';position:absolute;inset:0;
+            background-image:linear-gradient(rgba(255,255,255,.05) 1px,transparent 1px),
+                linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px);
+            background-size:56px 56px;}
+        .slide.cover.design-tech:after{content:'';position:absolute;right:-140px;top:-140px;
+            width:640px;height:640px;border-radius:50%;
+            background:radial-gradient(circle,rgba(255,255,255,.16),transparent 62%);}
+        .slide.cover.design-tech .rule{background:linear-gradient(90deg,{p_light60},transparent)!important;}
+    """,
+    # 政务红金：庄重红渐变 + 金色细框 + 光芒
+    "gov": """
+        .slide.cover.design-gov{background:
+            conic-gradient(from 215deg at 84% -8%,rgba(255,216,140,.20),transparent 115deg),
+            linear-gradient(128deg,{p_dark} 0%,{p} 115%)!important;}
+        .slide.cover.design-gov .deco1,.slide.cover.design-gov .deco2{display:none;}
+        .slide.cover.design-gov:before{content:'';position:absolute;inset:26px;
+            border:1px solid rgba(245,216,142,.4);border-radius:10px;pointer-events:none;}
+        .slide.cover.design-gov:after{content:'';position:absolute;left:0;right:0;bottom:0;height:120px;
+            background:linear-gradient(180deg,transparent,rgba(0,0,0,.28));}
+        .slide.cover.design-gov .rule{background:linear-gradient(90deg,#f5d78e,rgba(245,215,142,.15))!important;}
+        .slide.cover.design-gov .kicker{color:#f5d78e!important;}
+    """,
+    # 商务暖调：主色渐变 + 大小圆弧层叠
+    "business": """
+        .slide.cover.design-business{background:linear-gradient(118deg,{p_dark} 0%,{p} 72%,{p_light40} 135%)!important;}
+        .slide.cover.design-business .deco1,.slide.cover.design-business .deco2{display:none;}
+        .slide.cover.design-business:before{content:'';position:absolute;left:-240px;bottom:-280px;
+            width:760px;height:760px;border-radius:50%;
+            background:radial-gradient(circle,rgba(255,255,255,.10),transparent 62%);}
+        .slide.cover.design-business:after{content:'';position:absolute;right:-110px;top:-170px;
+            width:520px;height:520px;border-radius:50%;border:2px solid rgba(255,255,255,.22);}
+    """,
+    # 清新自然：浅底大圆 + 柔和弧
+    "fresh": """
+        .slide.cover.design-fresh{background:linear-gradient(132deg,{p} 0%,{p_dark} 95%)!important;}
+        .slide.cover.design-fresh .deco1,.slide.cover.design-fresh .deco2{display:none;}
+        .slide.cover.design-fresh:before{content:'';position:absolute;right:-190px;bottom:-230px;
+            width:680px;height:680px;border-radius:50%;background:rgba(255,255,255,.10);}
+        .slide.cover.design-fresh:after{content:'';position:absolute;right:60px;top:-140px;
+            width:380px;height:380px;border-radius:50%;background:rgba(255,255,255,.08);}
+        .slide.cover.design-fresh .cover-title{color:#fff;}
+    """,
+    # 文化水墨：深墨底 + 月轮 + 金色角框
+    "culture": """
+        .slide.cover.design-culture{background:linear-gradient(118deg,#1d1a15 0%,{p_dark} 82%)!important;}
+        .slide.cover.design-culture .deco1,.slide.cover.design-culture .deco2{display:none;}
+        .slide.cover.design-culture:before{content:'';position:absolute;right:110px;top:110px;
+            width:300px;height:300px;border-radius:50%;
+            background:radial-gradient(circle at 38% 38%,rgba(245,227,190,.32),rgba(245,227,190,.06) 70%);}
+        .slide.cover.design-culture:after{content:'';position:absolute;inset:26px;
+            border:1px solid rgba(214,186,128,.32);border-radius:6px;pointer-events:none;}
+        .slide.cover.design-culture .kicker{color:#d6ba80!important;}
+        .slide.cover.design-culture .rule{background:#d6ba80!important;}
+    """,
+    # 暗黑奢感：近黑底 + 斜切金线
+    "dark": """
+        .slide.cover.design-dark{background:linear-gradient(120deg,#0a0c10 0%,{p_dark} 115%)!important;}
+        .slide.cover.design-dark .deco1,.slide.cover.design-dark .deco2{display:none;}
+        .slide.cover.design-dark:before{content:'';position:absolute;left:-10%;top:64%;width:130%;height:3px;
+            background:linear-gradient(90deg,transparent,rgba(229,193,120,.85),transparent);
+            transform:rotate(-6deg);}
+        .slide.cover.design-dark:after{content:'';position:absolute;left:-10%;top:70%;width:130%;height:1px;
+            background:linear-gradient(90deg,transparent,rgba(229,193,120,.4),transparent);
+            transform:rotate(-6deg);}
+        .slide.cover.design-dark .kicker{color:rgba(229,193,120,.9)!important;}
+        .slide.cover.design-dark .rule{background:rgba(229,193,120,.9)!important;}
+    """,
+}
+
+
+def _cover_slide(topic: str, bullets: List[Dict], image: str | None = None,
+                 design: str = "") -> str:
     chips = "".join(f'<span class="chip">{html.escape(p["v"] if not p["k"] else p["k"] + " · " + p["v"])}</span>'
                     for p in bullets[:3])
     img_html = ""
     if image:
         img_html = (f'<img class="cover-img" src="{image}" alt="">'
                     f'<div class="cover-shade"></div>')
+    dcls = f" design-{design}" if design in _COVER_DESIGN else ""
     return f"""
-    <div class="slide cover{' has-img' if image else ''}">
+    <div class="slide cover{dcls}{' has-img' if image else ''}">
       {img_html}
       <div class="deco1"></div><div class="deco2"></div>
       <div class="cover-inner">
@@ -319,7 +397,9 @@ def build_slides_html(slides: List[Dict], theme: Dict | None) -> str:
     """slides JSON → 自包含 HTML（Electron 加载后逐页截图）。"""
     primary = (theme or {}).get("primary") or "#1a3a5c"
     style = (theme or {}).get("style") or "简约商务"
+    design = (theme or {}).get("design") or ""
     css = _STYLE_CSS.get(style, _DEFAULT_STYLE_CSS)
+    css += _COVER_DESIGN.get(design, "")
     for key, val in {
         "{p}": primary,
         "{p_dark}": _shade(primary, 0.38),
@@ -342,7 +422,7 @@ def build_slides_html(slides: List[Dict], theme: Dict | None) -> str:
         bullets = [b for b in (s.get("bullets") or []) if str(b).strip()]
         img = s.get("image") if isinstance(s.get("image"), str) and s.get("image").startswith("data:image") else None
         if i == 0:
-            parts.append(_cover_slide(title, [split_point(b) for b in bullets], img))
+            parts.append(_cover_slide(title, [split_point(b) for b in bullets], img, design))
         else:
             parts.append(
                 _content_slide(i, total, topic, title, bullets, last=(i == total - 1), image=img,

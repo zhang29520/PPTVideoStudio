@@ -208,6 +208,32 @@ def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,
     return slides[:slides_count], None
 
 
+# ---------- 主题分析：场景识别 → 封面设计模板 ----------
+
+_SCENE_KEYWORDS = {
+    "gov": ("党建", "政府", "政务", "法治", "安全", "宣传", "文明", "主题教", "纪委",
+            "公安", "检察", "财政", "民生", "乡村振兴", "红色"),
+    "tech": ("AI", "科技", "数字", "智能", "互联网", "软件", "数据", "云计算",
+             "区块链", "5G", "芯片", "机器人", "算法", "大模型", "agent", "it", "系统"),
+    "culture": ("文化", "艺术", "历史", "传统", "国潮", "非遗", "旅游", "文创",
+                "博物馆", "书画", "国学", "文旅"),
+    "education": ("教育", "教学", "课程", "学校", "培训", "学生", "校园", "课件",
+                  "招生", "毕业"),
+    "fresh": ("健康", "环保", "生态", "农业", "食品", "医疗", "绿色", "公益"),
+}
+
+
+def analyze_topic(topic: str) -> str:
+    """主题 → 设计方案 key（tech/gov/culture/education/fresh/business）。"""
+    t = (topic or "").lower()
+    best, hits = "business", 0
+    for key, words in _SCENE_KEYWORDS.items():
+        n = sum(1 for w in words if w.lower() in t)
+        if n > hits:
+            best, hits = key, n
+    return best
+
+
 def generate_outline(
     topic: str, slides_count: int = 8, audience: str = "通用受众", progress=None,
     use_llm: bool = True, profile_id: str | None = None,
