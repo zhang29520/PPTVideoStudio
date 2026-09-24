@@ -9,6 +9,7 @@ effects=True 时启用「随机镜头动效」：每页随机 Ken Burns（推近
 import json
 import random
 import shutil
+import sys
 from pathlib import Path
 from typing import Dict, List
 
@@ -18,7 +19,11 @@ from .render import render_slides
 RES_MAP = {"720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)}
 
 # 内置可商用背景音乐（本项目程序化生成，无第三方版权）
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+# PyInstaller onefile 下资源解压到 sys._MEIPASS
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    ASSETS_DIR = Path(sys._MEIPASS) / "app" / "assets"
+else:
+    ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 BGM_STYLES = {
     "calm": ("舒缓", "bgm_calm.mp3"),
     "gentle": ("温柔", "bgm_gentle.mp3"),

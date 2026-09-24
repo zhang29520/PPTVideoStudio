@@ -7,6 +7,10 @@ const { spawn } = require("child_process");
 const isDev = !app.isPackaged;
 // 规避部分环境（虚拟机/老显卡）GPU 崩溃导致的白屏
 app.disableHardwareAcceleration();
+// Windows 修复：原生窗口遮挡计算特性会导致输入框无法聚焦/IME 失效（点击输入框打不了字）
+if (process.platform === "win32") {
+  app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+}
 // 公开发布仓库（更新检查）与网盘兜底
 const RELEASE_REPO = "zhang29520/PPTVideoStudio";
 const QUARK_URL = "https://pan.quark.cn/s/b76fc109e73d";

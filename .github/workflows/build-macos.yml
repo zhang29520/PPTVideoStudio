@@ -31,6 +31,7 @@ jobs:
             --collect-all pptx \
             --collect-all multipart \
             --collect-all fitz \
+            --add-data "app/assets:app/assets" \
             --hidden-import uvicorn.logging \
             --hidden-import uvicorn.loops.auto \
             --hidden-import uvicorn.protocols.http.auto \

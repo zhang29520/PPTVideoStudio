@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, runTask } from "./api";
 
-const APP_VERSION = "0.5.3";
+const APP_VERSION = "0.5.4";
 const ORANGE = "#FF6B35";
 const ORANGE_SOFT = "#FFF3EC";
 const INK = "#26221E";
@@ -170,8 +170,9 @@ function Thumb({ projectId, index, tick, onZoom, big, w = 150, pending }) {
     api.thumbUrl(projectId, index).then((u) => alive && setUrl(`${u}?t=${tick}-${Date.now()}`)).catch(() => {});
     return () => { alive = false; };
   }, [projectId, index, tick, pending]);
-  // 图片还没渲染出来时每 2.5s 自动重试，直到加载成功
+  // 图片还没渲染出来时每 2.5s 自动重试，直到加载成功；失败立即回退占位（不显示裂图）
   function onErr() {
+    setUrl("");
     if (tried > 40) return;
     setTimeout(() => {
       api.thumbUrl(projectId, index).then((u) => setUrl(`${u}?t=${Date.now()}`)).catch(() => {});
@@ -193,6 +194,10 @@ function Thumb({ projectId, index, tick, onZoom, big, w = 150, pending }) {
         </span>
       ) : url ? (
         <img src={url} onError={onErr} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={`第${index + 1}页`} />
+      ) : tried > 8 ? (
+        <span style={{ color: "#A89F93", fontSize: 11, textAlign: "center", lineHeight: 1.5, padding: 4 }}>
+          第{index + 1}页<br />画面提取失败<br />导出视频将用网页版式渲染
+        </span>
       ) : (
         <span style={{ color: "#A89F93", fontSize: 11, textAlign: "center", lineHeight: 1.5, padding: 4 }}>
           渲染中<br />首次约需 10 秒
@@ -587,10 +592,11 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
         <div style={{ ...cardStyle, padding: "34px 30px" }}>
           <div style={{ display: "flex", gap: 10 }}>
             <input
+              autoFocus
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               placeholder="输入主题，例如：智慧文旅夜游项目汇报"
-              style={{ ...inputStyle, fontSize: 15, padding: "14px 16px" }}
+              style={{ ...inputStyle, fontSize: 15, padding: "14px 16px", WebkitUserSelect: "text" }}
               onKeyDown={(e) => e.key === "Enter" && topic.trim() && setStep(2)}
             />
           </div>
@@ -998,22 +1004,27 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
       // 直接用 <audio> 元素加载（与缩略图 <img> 同一网络通道，稳定可达），
       // 不走 fetch —— fetch 在部分代理环境下会被拦截
       const u = `${await api.previewUrl(voice, clampSpeed(speed))}?t=${Date.now()}`;
+      const fetchDetail = async () => {
+        // 播放失败时向后端要具体错误（如：无法连接微软 TTS / SSL 错误）
+        try {
+          const res = await fetch(u);
+          const data = await res.json().catch(() => null);
+          if (data?.detail) return String(data.detail);
+        } catch {}
+        return "";
+      };
       await new Promise((resolve, reject) => {
         const a = new Audio(u);
         const to = setTimeout(() => { a.src = ""; reject(new Error("试听超时，请检查网络后重试")); }, 20000);
         a.onended = () => { clearTimeout(to); resolve(); };
         a.onerror = async () => {
           clearTimeout(to);
-          let m = "试听播放失败，请重试（配音需要联网使用 Edge-TTS）";
-          // 透出后端具体错误（如：无法连接微软 TTS 服务器 / SSL 错误等）
-          try {
-            const res = await fetch(u);
-            const data = await res.json().catch(() => null);
-            if (data?.detail) m = String(data.detail);
-          } catch {}
-          reject(new Error(m));
+          reject(new Error(await fetchDetail() || "试听播放失败，请重试（配音需要联网使用 Edge-TTS）"));
         };
-        a.play().catch(() => { clearTimeout(to); reject(new Error("播放被拦截，请重试")); });
+        a.play().catch(async () => {
+          clearTimeout(to);
+          reject(new Error(await fetchDetail() || "播放被拦截，请重试（若多次失败请检查网络）"));
+        });
       });
     } catch (e) {
       const m = typeof e?.message === "string" && e.message ? e.message : "请检查网络";
@@ -1129,11 +1140,11 @@ function VideoPanel({ project, goPanel }) {
     api.bgmFileUrl(bgmStyle).then((u) => {
       const a = new Audio(u);
       a.onended = () => setPreviewBgm(null);
-      a.onerror = () => setPreviewBgm(null);
+      a.onerror = () => { setPreviewBgm(null); setMsg("背景音乐试听失败：音乐文件加载失败，请重启应用后重试"); setErr(true); };
       bgmAudio.current = a;
       setPreviewBgm(bgmStyle);
-      a.play().catch(() => setPreviewBgm(null));
-    }).catch(() => {});
+      a.play().catch(() => { setPreviewBgm(null); setMsg("背景音乐试听失败：播放被拦截，请重试"); setErr(true); });
+    }).catch(() => { setMsg("背景音乐试听失败：无法连接本地引擎"); setErr(true); });
   }
 
   const bgmName = (bgmStyles.find((s) => s.id === bgmStyle) || {}).name || "舒缓";
@@ -1289,8 +1300,10 @@ const AI_PRESETS = {
   openai: { name: "OpenAI", base: "https://api.openai.com/v1", model: "gpt-4o-mini" },
 };
 
-function SettingsPanel() {
+function SettingsPanel({ onUpdate }) {
   const [s, setS] = useState(null);
+  const [showWechat, setShowWechat] = useState(false);
+  const [wechatCopied, setWechatCopied] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState(false);
   const [editing, setEditing] = useState(null);   // 正在编辑/新增的 profile（null=关闭）
@@ -1508,28 +1521,22 @@ function SettingsPanel() {
       </div>
 
       <div style={cardStyle}>
-        <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>④ 生成引擎（进阶）</h3>
-        <div style={{
-          background: ORANGE_SOFT, border: "1px solid #FFD9C4", color: "#B44A1E",
-          borderRadius: 10, padding: "10px 14px", fontSize: 12.5, lineHeight: 1.8,
-        }}>
-          当前：内置 AI 内容引擎（分析主题 → 抓取资料 → 大纲 → 内容，免配置）。<br />
-          计划：后续提供「开源专业引擎」可选增强 —— 采用 presenton（GitHub 10.7k★，Apache 2.0 可商用）；banana-slides（15.6k★）因 AGPL 协议 + 依赖海外 Gemini API 不适合内置。
-        </div>
-      </div>
-
-      <div style={cardStyle}>
         <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>关于开发者</h3>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <tbody>
             <tr><td style={{ padding: "8px 0", color: MUTED, width: 110 }}>软件</td><td>PPTVideoStudio v{APP_VERSION}</td></tr>
             <tr><td style={{ padding: "8px 0", color: MUTED }}>版权</td><td>© 2026 梦极</td></tr>
-            <tr><td style={{ padding: "8px 0", color: MUTED }}>联系开发者</td><td>微信：mengji333</td></tr>
+            <tr><td style={{ padding: "8px 0", color: MUTED }}>联系开发者</td>
+              <td>
+                {showWechat
+                  ? <span>微信：<b style={{ color: INK }}>mengji333</b>（点击复制）<span onClick={() => { try { navigator.clipboard.writeText("mengji333"); setWechatCopied(true); setTimeout(() => setWechatCopied(false), 2000); } catch {} }} style={{ color: ORANGE, cursor: "pointer", marginLeft: 6 }}>{wechatCopied ? "已复制 ✔" : "复制"}</span></span>
+                  : <span onClick={() => setShowWechat(true)} style={{ color: ORANGE, cursor: "pointer" }}>点击显示联系方式</span>}
+              </td></tr>
             <tr><td style={{ padding: "8px 0", color: MUTED }}>检查更新</td>
               <td>
-                <span onClick={async () => { const u = await window.pvs.checkUpdate(); alert(u.available ? `发现新版本 v${u.latest}` : "当前已是最新版本"); }}
-                  style={{ color: ORANGE, cursor: "pointer" }}>检查更新</span>
-                {" "}· GitHub / 夸克网盘
+                <span onClick={async () => { const u = await window.pvs.checkUpdate(); onUpdate?.(u); }}
+                  style={{ color: ORANGE, cursor: "pointer" }}>检查更新（GitHub）</span>
+                {" "}· <span onClick={() => window.pvs.openExternal((typeof window !== "undefined" && window.pvs) ? "https://pan.quark.cn/s/b76fc109e73d" : "#")} style={{ color: ORANGE, cursor: "pointer" }}>夸克网盘</span>
               </td></tr>
           </tbody>
         </table>
@@ -1793,7 +1800,19 @@ export default function App() {
               )}
             </div>
           ))}
-          <div style={{ marginTop: "auto", padding: "12px 14px", fontSize: 11, color: "#6d665e", lineHeight: 1.8 }}>
+          <div style={{ marginTop: "auto", padding: "8px 14px 4px" }}>
+            <div onClick={async () => setUpdate(await window.pvs.checkUpdate())}
+              style={{
+                display: "flex", alignItems: "center", gap: 9, padding: "9px 12px",
+                borderRadius: 10, cursor: "pointer", fontSize: 13, color: "#B5ADA4",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = SIDE_HOVER; e.currentTarget.style.color = "#fff"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#B5ADA4"; }}
+            >
+              <span style={{ fontSize: 14 }}>⬆</span> 检查更新
+            </div>
+          </div>
+          <div style={{ padding: "6px 14px 14px", fontSize: 11, color: "#6d665e", lineHeight: 1.8 }}>
             © 2026 梦极<br />联系开发者微信：mengji333
           </div>
         </aside>
@@ -1816,7 +1835,7 @@ export default function App() {
             {panel === "video" && (
               <VideoPanel project={project} goPanel={goPanel} />
             )}
-            {panel === "settings" && <SettingsPanel />}
+            {panel === "settings" && <SettingsPanel onUpdate={setUpdate} />}
           </BackendGate>
         </main>
       </div>
