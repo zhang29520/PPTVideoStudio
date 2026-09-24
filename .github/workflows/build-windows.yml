@@ -25,7 +25,7 @@ jobs:
         run: |
           cd backend
           pip install -r requirements.txt pyinstaller httpx python-multipart
-          pyinstaller --onefile --name pvs-backend --paths . run_backend.py `
+          pyinstaller --name pvs-backend --paths . run_backend.py `
             --collect-all pptx `
             --collect-all multipart `
             --collect-all fitz `
@@ -40,7 +40,8 @@ jobs:
             --hidden-import uvicorn.protocols.websockets.auto `
             --hidden-import uvicorn.lifespan.on
           New-Item -ItemType Directory -Force ..\desktop\resources\pvs-backend | Out-Null
-          Copy-Item dist\pvs-backend.exe ..\desktop\resources\pvs-backend\
+          Remove-Item ..\desktop\resources\pvs-backend\* -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item dist\pvs-backend\* ..\desktop\resources\pvs-backend\ -Recurse -Force
 
       - name: Smoke test backend exe
         shell: pwsh

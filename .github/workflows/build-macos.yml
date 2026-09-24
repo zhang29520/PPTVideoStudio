@@ -27,7 +27,7 @@ jobs:
         run: |
           cd backend
           pip install -r requirements.txt pyinstaller httpx python-multipart
-          pyinstaller --onefile --name pvs-backend --paths . run_backend.py \
+          pyinstaller --name pvs-backend --paths . run_backend.py \
             --collect-all pptx \
             --collect-all multipart \
             --collect-all fitz \
@@ -38,8 +38,9 @@ jobs:
             --hidden-import uvicorn.protocols.http.h11_impl \
             --hidden-import uvicorn.protocols.websockets.auto \
             --hidden-import uvicorn.lifespan.on
+          rm -rf ../desktop/resources/pvs-backend
           mkdir -p ../desktop/resources/pvs-backend
-          cp dist/pvs-backend ../desktop/resources/pvs-backend/
+          cp -R dist/pvs-backend/* ../desktop/resources/pvs-backend/
 
       - name: Bundle FFmpeg (static build)
         run: |

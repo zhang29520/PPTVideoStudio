@@ -107,11 +107,16 @@ async function startBackend(attempt = 1) {
     fs.writeSync(logStream, `[spawn error] ${err.message}\n`);
     backendState.error = "后端启动失败：" + err.message;
   });
-  backendProc.on("exit", (code) => {
+  backendProc.on("exit", (code, signal) => {
     spawnedBackends.delete(backendProc);
-    fs.writeSync(logStream, `[exit] code=${code}\n`);
+    fs.writeSync(logStream, `[exit] code=${code} signal=${signal || ""}\n`);
     if (!backendState.ready) {
-      backendState.error = `后端进程退出（code=${code}），详见日志`;
+      // code=null（被信号/外部杀死）多为杀毒软件拦截未签名后端程序
+      if (code === null || signal) {
+        backendState.error = "后端进程被系统或杀毒软件终止。请打开 Windows 安全中心 → 病毒和威胁防护 → 管理设置 → 排除项 → 添加排除项，选择本应用的安装文件夹（或允许运行本应用），然后点「重试启动」。";
+      } else {
+        backendState.error = `后端进程退出（code=${code}），详见日志`;
+      }
     }
     backendProc = null;
     // 意外退出自动重启（应用退出时 quitting 已置位，跳过）
