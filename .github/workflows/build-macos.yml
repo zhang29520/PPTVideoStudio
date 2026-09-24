@@ -70,3 +70,18 @@ jobs:
           path: |
             desktop/dist/*.dmg
             desktop/dist/*.zip
+
+      - name: Attach to release (tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" 2>/dev/null || \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "v$TAG" --generate-notes
+          # 重命名带版本号后上传
+          for f in desktop/dist/*.dmg desktop/dist/*.zip; do
+            [ -e "$f" ] || continue
+            ext="${f##*.}"
+            gh release upload "$TAG" "$f#PPTVideoStudio-$TAG-mac.$ext" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}

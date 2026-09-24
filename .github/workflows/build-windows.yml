@@ -100,3 +100,18 @@ jobs:
         with:
           name: PPTVideoStudio-windows-installer
           path: desktop/dist/*.exe
+
+      - name: Attach to release (tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = ${env:GITHUB_REF_NAME}
+          $exe = Get-ChildItem desktop\dist\*.exe | Select-Object -First 1
+          $name = "PPTVideoStudio-Setup-$tag.exe"
+          gh release view $tag --repo ${{ github.repository }} 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo ${{ github.repository }} --title "v$tag" --generate-notes
+          }
+          gh release upload $tag "$($exe.FullName)#$name" --repo ${{ github.repository }} --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
