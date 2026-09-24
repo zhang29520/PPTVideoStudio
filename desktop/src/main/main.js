@@ -8,8 +8,8 @@ const isDev = !app.isPackaged;
 // 规避部分环境（虚拟机/老显卡）GPU 崩溃导致的白屏
 app.disableHardwareAcceleration();
 // 公开发布仓库（更新检查）与网盘兜底
-const RELEASE_REPO = "zhang29520/PPTVideoStudio-release";
-const QUARK_URL = "https://pan.quark.cn/s/465afff8905a";
+const RELEASE_REPO = "zhang29520/PPTVideoStudio";
+const QUARK_URL = "https://pan.quark.cn/s/b76fc109e73d";
 let win = null;
 let backendProc = null;
 let backendState = {
@@ -117,7 +117,8 @@ async function startBackend(attempt = 1) {
     }
   });
 
-  const ok = await waitForHealth(port, 60000);
+  // 老机器上 PyInstaller one-file 解压 + Gatekeeper 首次扫描可能需要 1~2 分钟
+  const ok = await waitForHealth(port, 120000);
   if (ok) {
     backendState.ready = true;
     backendState.error = "";
@@ -192,6 +193,18 @@ function isNewer(latest, current) {
   return false;
 }
 
+function pickUpdateAsset(assets) {
+  if (!Array.isArray(assets)) return null;
+  const isMac = process.platform === "darwin";
+  const pat = isMac ? /-mac\.dmg$/ : /Setup-\d[\d.]*\.exe$|\.exe$/i;
+  const list = assets.filter((a) => pat.test(a.name || ""));
+  if (!list.length) return null;
+  // dmg 优先于 zip；exe 取名字含 Setup 的
+  list.sort((a, b) => (isMac ? (a.name.endsWith(".dmg") ? -1 : 1) - (b.name.endsWith(".dmg") ? -1 : 1) : 0));
+  const a = list[0];
+  return { name: a.name, url: a.browser_download_url, size: a.size || 0 };
+}
+
 async function checkUpdate() {
   const current = app.getVersion();
   try {
@@ -202,10 +215,11 @@ async function checkUpdate() {
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     const latest = String(data.tag_name || "").replace(/^v/, "");
+    const asset = pickUpdateAsset(data.assets);
     if (latest && isNewer(latest, current)) {
-      return { available: true, current, latest, url: data.html_url || `https://github.com/${RELEASE_REPO}/releases/latest`, quark: QUARK_URL, source: "github" };
+      return { available: true, current, latest, url: data.html_url || `https://github.com/${RELEASE_REPO}/releases/latest`, quark: QUARK_URL, asset, source: "github" };
     }
-    return { available: false, current, latest: latest || current, quark: QUARK_URL, source: "github" };
+    return { available: false, current, latest: latest || current, quark: QUARK_URL, asset, source: "github" };
   } catch (e) {
     // GitHub 连不上：不弹窗打扰，仅提供网盘入口
     return { available: false, current, latest: "", quark: QUARK_URL, source: "none", githubError: String(e.message || e) };
@@ -213,6 +227,52 @@ async function checkUpdate() {
 }
 
 ipcMain.handle("app:checkUpdate", () => checkUpdate());
+
+/* ---------- 应用内一键更新：下载 + 打开安装包 ---------- */
+let updateDownloadAbort = null;
+
+ipcMain.handle("app:downloadUpdate", async (_e, asset) => {
+  if (!asset?.url || !win || win.isDestroyed()) return { ok: false, error: "无法开始下载" };
+  const dest = path.join(app.getPath("temp"), `PPTVideoStudio-Update-${asset.name || "installer"}`);
+  try { fs.unlinkSync(dest); } catch {}
+  let received = 0;
+  const total = asset.size || 0;
+  let lastPct = -1;
+  updateDownloadAbort = new AbortController();
+  return await new Promise((resolve) => {
+    const req = electronNet.request(asset.url, { signal: updateDownloadAbort.signal });
+    req.setHeader("User-Agent", "PPTVideoStudio");
+    req.on("response", (res) => {
+      if (res.statusCode >= 300 || res.statusCode < 200) {
+        resolve({ ok: false, error: `下载失败（HTTP ${res.statusCode}），请改用网盘渠道` });
+        return;
+      }
+      const totalReal = Number(res.headers["content-length"]) || total;
+      const out = fs.createWriteStream(dest);
+      res.on("data", (c) => {
+        received += c.length;
+        out.write(c);
+        const pct = totalReal ? Math.floor((received / totalReal) * 100) : -1;
+        if (pct !== lastPct && win && !win.isDestroyed()) {
+          lastPct = pct;
+          win.webContents.send("app:update-progress", { received, total: totalReal, pct });
+        }
+      });
+      res.on("end", () => {
+        out.end(() => resolve({ ok: true, path: dest, size: received }));
+      });
+      res.on("error", (err) => resolve({ ok: false, error: String(err.message || err) }));
+    });
+    req.on("error", (err) => resolve({ ok: false, error: String(err.message || err) }));
+    req.end();
+  });
+});
+
+ipcMain.handle("app:installUpdate", async (_e, filePath) => {
+  if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: "安装包不存在" };
+  const r = await shell.openPath(filePath);
+  return { ok: !r, error: r || "" }; // shell.openPath 返回空字符串表示成功
+});
 
 /* ---------- HTML 幻灯片渲染工作器 ----------
  * 后端把 slides HTML 登记为任务，这里用离屏窗口逐页截图回传 PNG。

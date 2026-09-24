@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, runTask } from "./api";
 
-const APP_VERSION = "0.5.0";
+const APP_VERSION = "0.5.3";
 const ORANGE = "#FF6B35";
 const ORANGE_SOFT = "#FFF3EC";
 const INK = "#26221E";
@@ -1547,6 +1547,12 @@ function SettingsPanel() {
    后端网关页 & 更新弹窗
 ============================================================ */
 function BackendGate({ info, children }) {
+  const [slowStart, setSlowStart] = useState(false);
+  useEffect(() => {
+    if (info.ready || info.error) { setSlowStart(false); return; }
+    const t = setTimeout(() => setSlowStart(true), 30000);
+    return () => clearTimeout(t);
+  }, [info.ready, info.error]);
   if (info.ready) return children;
   return (
     <div style={{ minHeight: "70vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1559,6 +1565,17 @@ function BackendGate({ info, children }) {
             }} />
             <h2 style={{ color: INK, fontSize: 18 }}>正在启动本地引擎…</h2>
             <p style={{ color: MUTED, fontSize: 13 }}>首次启动需要几秒钟，请稍候</p>
+            {slowStart && (
+              <div style={{ marginTop: 16 }}>
+                <p style={{ color: MUTED, fontSize: 12, lineHeight: 1.7 }}>
+                  启动时间比预期长（老电脑首次启动可能需要 1~2 分钟）<br />如果一直无响应，可查看日志或重试
+                </p>
+                <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 12 }}>
+                  <Btn kind="ghost" onClick={() => window.pvs.openLogs()}>打开日志文件夹</Btn>
+                  <Btn onClick={() => window.pvs.restartBackend()}>重试启动</Btn>
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -1577,26 +1594,91 @@ function BackendGate({ info, children }) {
 }
 
 function UpdateDialog({ info, onClose }) {
+  const [dlState, setDlState] = useState(null); // {pct, received, total}
+  const [dlMsg, setDlMsg] = useState("");
+  const [dlErr, setDlErr] = useState("");
+  const [slowHint, setSlowHint] = useState(false);
+  const lastTick = useRef({ time: Date.now(), received: 0 });
   if (!info) return null;
+
+  useEffect(() => {
+    window.pvs.onUpdateProgress?.((p) => {
+      setDlState(p);
+      const now = Date.now();
+      if (p.received !== lastTick.current.received) lastTick.current = { time: now, received: p.received };
+    });
+    // 下载速度监控：60 秒无进度变化 → 提示网盘
+    const timer = setInterval(() => {
+      setDlState((s) => {
+        if (s && Date.now() - lastTick.current.time > 60000) setSlowHint(true);
+        return s;
+      });
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  async function oneClickUpdate() {
+    if (!info.asset?.url) { setDlErr("未找到当前平台的安装包，请用 GitHub / 夸克网盘下载"); return; }
+    setDlErr(""); setSlowHint(false); setDlMsg("正在下载更新…（完成后自动打开安装包）");
+    setDlState({ pct: 0, received: 0, total: info.asset.size || 0 });
+    lastTick.current = { time: Date.now(), received: 0 };
+    const r = await window.pvs.downloadUpdate(info.asset);
+    if (!r.ok) { setDlErr(r.error || "下载失败"); setDlMsg(""); setDlState(null); setSlowHint(true); return; }
+    setDlMsg("下载完成，正在打开安装包…");
+    const ir = await window.pvs.installUpdate(r.path);
+    if (!ir.ok) { setDlErr(ir.error || "打开安装包失败"); setDlMsg(""); return; }
+    setDlMsg("已打开安装包，请按提示完成安装（安装后重新打开应用即为新版本）");
+    setDlState(null);
+  }
+
+  const showQuarkHint = dlErr || slowHint;
   return (
-    <div onClick={onClose} style={{
+    <div onClick={dlState ? undefined : onClose} style={{
       position: "fixed", inset: 0, background: "rgba(30,25,20,.35)", zIndex: 100,
       display: "flex", alignItems: "center", justifyContent: "center",
     }}>
       <div onClick={(e) => e.stopPropagation()} style={{
-        background: "#fff", borderRadius: 16, padding: 26, width: 420, boxShadow: "0 12px 40px rgba(0,0,0,.15)",
+        background: "#fff", borderRadius: 16, padding: 26, width: 440, boxShadow: "0 12px 40px rgba(0,0,0,.15)",
       }}>
         <h3 style={{ margin: "0 0 6px", fontSize: 17, color: INK }}>
           {info.available ? `发现新版本 v${info.latest}` : "检查更新"}
         </h3>
         <p style={{ color: MUTED, fontSize: 13, margin: "0 0 16px", lineHeight: 1.7 }}>
           当前版本 v{info.current}
-          {info.available ? `，最新版本 v${info.latest}。推荐优先从 GitHub 下载；如果 GitHub 打不开或下载太慢，请用夸克网盘（两个渠道安装包一致）。` : info.source === "none" ? "，暂时连不上 GitHub 更新服务，可从夸克网盘手动获取最新版本。" : "，已是最新版本。"}
+          {info.available ? `，最新版本 v${info.latest}。可一键更新（应用内直接下载并打开安装包），也可从 GitHub / 夸克网盘手动下载。` : info.source === "none" ? "，暂时连不上 GitHub 更新服务，可从夸克网盘手动获取最新版本。" : "，已是最新版本。"}
         </p>
+        {dlMsg && <p style={{ color: INK, fontSize: 13, margin: "0 0 10px" }}>{dlMsg}</p>}
+        {dlState && (
+          <div style={{ marginBottom: 12 }}>
+            <div className="pvs-indet" style={{ display: dlState.pct >= 0 ? "none" : "block" }}><div /></div>
+            {dlState.pct >= 0 && (
+              <>
+                <div style={{ height: 8, background: "#F1EDE8", borderRadius: 6, overflow: "hidden" }}>
+                  <div style={{ width: `${dlState.pct}%`, height: "100%", background: ORANGE, borderRadius: 6, transition: "width .3s" }} />
+                </div>
+                <div style={{ color: MUTED, fontSize: 12, marginTop: 6 }}>
+                  {dlState.pct}%{dlState.total ? `（${(dlState.received / 1048576).toFixed(1)} / ${(dlState.total / 1048576).toFixed(1)} MB）` : ""}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {showQuarkHint && (
+          <div onClick={() => window.pvs.openExternal(info.quark)} style={{
+            background: "#FFF4EC", border: `1px solid ${ORANGE}`, borderRadius: 10,
+            padding: "10px 14px", marginBottom: 12, cursor: "pointer", fontSize: 13, color: INK, lineHeight: 1.6,
+          }}>
+            💡 下载{dlErr ? "失败" : "太慢"}？<b style={{ color: ORANGE }}>点此用夸克网盘下载</b>，国内速度更快（安装包一致）
+          </div>
+        )}
+        {dlErr && <p style={{ color: "#C0392B", fontSize: 12, margin: "0 0 10px" }}>{dlErr}</p>}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {info.available && info.url && <Btn onClick={() => window.pvs.openExternal(info.url)}>GitHub 下载</Btn>}
-          <Btn kind={info.available ? "ghost" : "primary"} onClick={() => window.pvs.openExternal(info.quark)}>夸克网盘下载</Btn>
-          <Btn kind="ghost" onClick={onClose}>{info.available ? "暂不更新" : "关闭"}</Btn>
+          {info.available && info.asset?.url && (
+            <Btn onClick={oneClickUpdate} disabled={!!dlState}>⚡ 一键更新{info.asset.size ? `（${(info.asset.size / 1048576).toFixed(0)} MB）` : ""}</Btn>
+          )}
+          {info.available && info.url && <Btn kind="ghost" onClick={() => window.pvs.openExternal(info.url)} disabled={!!dlState}>GitHub 下载</Btn>}
+          <Btn kind={showQuarkHint ? "primary" : info.available ? "ghost" : "primary"} onClick={() => window.pvs.openExternal(info.quark)} disabled={!!dlState}>夸克网盘</Btn>
+          <Btn kind="ghost" onClick={onClose} disabled={!!dlState}>{info.available ? "暂不更新" : "关闭"}</Btn>
         </div>
       </div>
     </div>

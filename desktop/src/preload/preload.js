@@ -10,5 +10,8 @@ contextBridge.exposeInMainWorld("pvs", {
   updateInfo: () => ipcRenderer.invoke("app:updateInfo"),
   openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
   saveFileAs: (url, defaultName) => ipcRenderer.invoke("app:saveFileAs", { url, defaultName }),
+  downloadUpdate: (asset) => ipcRenderer.invoke("app:downloadUpdate", asset),
+  installUpdate: (filePath) => ipcRenderer.invoke("app:installUpdate", filePath),
+  onUpdateProgress: (cb) => ipcRenderer.on("app:update-progress", (_e, p) => cb(p)),
   onDownloadDone: (cb) => ipcRenderer.on("app:download-done", (_e, info) => cb(info)),
 });
