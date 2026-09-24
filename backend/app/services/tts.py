@@ -52,21 +52,25 @@ def _silence(path: Path, seconds: float) -> None:
     )
 
 
-def _synth_one(text: str, voice: str, rate: str, volume: str, out: Path, retries: int = 2) -> bool:
+def _synth_one(text: str, voice: str, rate: str, volume: str, out: Path, retries: int = 2, err_out: list = None) -> bool:
     async def run():
         tts = edge_tts.Communicate(text, voice, rate=rate, volume=volume)
         await tts.save(str(out))
 
+    last_err = None
     for attempt in range(retries + 1):
         try:
             asyncio.run(run())
             if out.exists() and out.stat().st_size > 1000:
                 return True
-        except Exception:
-            pass
+            last_err = "合成结果为空"
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
         if attempt < retries:
             import time
             time.sleep(1.2 * (attempt + 1))  # 网络抖动退避重试
+    if err_out is not None and last_err:
+        err_out.append(last_err)
     return False
 
 

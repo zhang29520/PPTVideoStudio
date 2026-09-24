@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, shell, session } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, shell, session, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
@@ -272,6 +272,30 @@ function startRenderWorker() {
 }
 ipcMain.handle("app:openExternal", (_e, url) => {
   if (/^https:\/\//.test(url)) shell.openExternal(url);
+});
+
+// 「另存为」：弹出系统保存对话框让用户选择位置，再把后端文件下载到该路径
+const { net: electronNet } = require("electron");
+ipcMain.handle("app:saveFileAs", async (_e, { url, defaultName }) => {
+  if (!win || win.isDestroyed()) return { saved: false, error: "窗口不可用" };
+  const r = await dialog.showSaveDialog(win, {
+    title: "保存文件",
+    defaultPath: defaultName || "PPTVideoStudio.pptx",
+  });
+  if (r.canceled || !r.filePath) return { saved: false, canceled: true };
+  await new Promise((resolve, reject) => {
+    const req = electronNet.request(url);
+    req.on("response", (res) => {
+      if (res.statusCode !== 200) { reject(new Error(`后端返回 ${res.statusCode}`)); return; }
+      const stream = fs.createWriteStream(r.filePath);
+      res.on("data", (c) => stream.write(c));
+      res.on("end", () => { stream.end(() => resolve()); });
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end();
+  });
+  return { saved: true, path: r.filePath };
 });
 let updateCache = null;
 app.whenReady().then(async () => {

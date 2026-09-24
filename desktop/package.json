@@ -1,6 +1,6 @@
 {
   "name": "ppt-video-studio",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "PPT 一键转视频工作台：主题生成 PPT / 导入 PPT → 解说词 → 配音 → MP4。© 2026 梦极",
   "author": "奇葩锅 <mr_xiaoping@163.com>",
   "main": "src/main/main.js",

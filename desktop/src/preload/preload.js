@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld("pvs", {
   checkUpdate: () => ipcRenderer.invoke("app:checkUpdate"),
   updateInfo: () => ipcRenderer.invoke("app:updateInfo"),
   openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
+  saveFileAs: (url, defaultName) => ipcRenderer.invoke("app:saveFileAs", { url, defaultName }),
   onDownloadDone: (cb) => ipcRenderer.on("app:download-done", (_e, info) => cb(info)),
 });

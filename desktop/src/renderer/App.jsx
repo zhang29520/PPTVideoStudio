@@ -140,7 +140,7 @@ const cardStyle = {
 
 function Seg({ options, value, onChange, style = {} }) {
   return (
-    <div style={{ display: "inline-flex", background: "#F1EDE8", borderRadius: 10, padding: 3, ...style }}>
+    <div style={{ display: "inline-flex", flexWrap: "wrap", rowGap: 4, background: "#F1EDE8", borderRadius: 10, padding: 3, maxWidth: "100%", ...style }}>
       {options.map(([v, label]) => (
         <span key={v}
           onClick={() => onChange(v)}
@@ -526,9 +526,20 @@ function HomePanel({ project, setProject, goPanel, onProjectChanged }) {
   async function savePpt() {
     setBusy(true); setMsg(""); setErr(false);
     try {
+      // 1) 保存到项目目录（保证项目数据一致）
       await api.saveSlides(project.id, slides);
       setThumbTick((t) => t + 1);
-      setMsg("PPT 已保存 ✔");
+      // 2) 弹出系统对话框，让用户选择保存位置
+      const safeTopic = (project.topic || "PPTVideoStudio").replace(/[\\/:*?"<>|]/g, "_").slice(0, 50);
+      const u = await api.pptDownloadUrl(project.id);
+      const r = window.pvs?.saveFileAs ? await window.pvs.saveFileAs(u, `${safeTopic}.pptx`) : { saved: false };
+      if (r?.saved) {
+        setMsg(`PPT 已保存到：${r.path}`);
+      } else if (r?.canceled) {
+        setMsg("PPT 已保存到项目（未选择导出位置）");
+      } else {
+        setMsg("PPT 已保存到项目 ✔");
+      }
     } catch (e) { setMsg("保存失败：" + e.message); setErr(true); }
     finally { setBusy(false); }
   }
@@ -938,6 +949,7 @@ const VOICES = [
   ["zh-CN-YunxiNeural", "云希 男·年轻"],
   ["zh-CN-YunjianNeural", "云健 男·沉稳"],
   ["zh-CN-XiaoyiNeural", "晓伊 女·活泼"],
+  ["zh-CN-YunxiaNeural", "云夏 女·清脆"],
 ];
 
 function AudioPanel({ project, goPanel, onAudioReady }) {
@@ -990,7 +1002,17 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
         const a = new Audio(u);
         const to = setTimeout(() => { a.src = ""; reject(new Error("试听超时，请检查网络后重试")); }, 20000);
         a.onended = () => { clearTimeout(to); resolve(); };
-        a.onerror = () => { clearTimeout(to); reject(new Error("试听播放失败，请重试（配音需要联网使用 Edge-TTS）")); };
+        a.onerror = async () => {
+          clearTimeout(to);
+          let m = "试听播放失败，请重试（配音需要联网使用 Edge-TTS）";
+          // 透出后端具体错误（如：无法连接微软 TTS 服务器 / SSL 错误等）
+          try {
+            const res = await fetch(u);
+            const data = await res.json().catch(() => null);
+            if (data?.detail) m = String(data.detail);
+          } catch {}
+          reject(new Error(m));
+        };
         a.play().catch(() => { clearTimeout(to); reject(new Error("播放被拦截，请重试")); });
       });
     } catch (e) {

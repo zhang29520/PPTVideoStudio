@@ -61,8 +61,12 @@ def tts_preview(voice: str = "", speed: str = "1.0"):
     text = "您好，这是当前语速的试听效果，生成视频时每页配音都会使用这个语速。"
     fd, path = tempfile.mkstemp(suffix=".mp3")
     Path(path).unlink(missing_ok=True)
-    if not _synth_one(text, v, rate, "+0%", Path(path)):
-        raise HTTPException(500, "试听合成失败，请检查网络")
+    errs: list = []
+    if not _synth_one(text, v, rate, "+0%", Path(path), err_out=errs):
+        detail = "试听合成失败，请检查网络（Edge-TTS 需要能访问微软服务器）"
+        if errs:
+            detail += f"｜{errs[-1][:200]}"
+        raise HTTPException(500, detail)
     return FileResponse(path, media_type="audio/mpeg", filename="preview.mp3")
 
 
