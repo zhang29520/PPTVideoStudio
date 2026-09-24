@@ -5,6 +5,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -78,7 +81,11 @@ jobs:
         shell: pwsh
         run: |
           $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          for ($i = 1; $i -le 3; $i++) {
+            try { Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -TimeoutSec 300; break }
+            catch { Write-Host "ffmpeg download attempt $i failed: $_"; Start-Sleep -Seconds 10 }
+          }
+          if (-not (Test-Path ffmpeg.zip)) { throw "ffmpeg download failed after 3 attempts" }
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_tmp
           $bin = (Get-ChildItem ffmpeg_tmp -Directory | Select-Object -First 1).FullName + "\bin"
           New-Item -ItemType Directory -Force desktop\resources\ffmpeg | Out-Null
