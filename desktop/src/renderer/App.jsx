@@ -1003,7 +1003,10 @@ function AudioPanel({ project, goPanel, onAudioReady }) {
     try {
       // 直接用 <audio> 元素加载（与缩略图 <img> 同一网络通道，稳定可达），
       // 不走 fetch —— fetch 在部分代理环境下会被拦截
-      const u = `${await api.previewUrl(voice, clampSpeed(speed))}?t=${Date.now()}`;
+      // previewUrl 已含 ?voice=...&speed=...，追加时间戳必须用 & 而非 ?
+      // （用 ? 会让 speed 变成 "1?t=..."，参数解析失败，语速设置失效）
+      const pvUrl = await api.previewUrl(voice, clampSpeed(speed));
+      const u = `${pvUrl}${pvUrl.includes("?") ? "&" : "?"}t=${Date.now()}`;
       const fetchDetail = async () => {
         // 播放失败时向后端要具体错误（如：无法连接微软 TTS / SSL 错误）
         try {

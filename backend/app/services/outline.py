@@ -54,6 +54,7 @@ def _chat(base: str, key: str, model: str, prompt: str, temperature: float,
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
+        "max_tokens": 8000,  # 长内容（多页扩写）默认上限会被截断导致 JSON 不完整
     }
     headers = {"Content-Type": "application/json"}
     if key:
@@ -77,16 +78,113 @@ def _chat(base: str, key: str, model: str, prompt: str, temperature: float,
         return None, detail or str(e)[:200]
 
 
+def _balance_json(t: str) -> str:
+    """截断 JSON 补全：丢弃最后一个不完整对象，闭合剩余括号/引号。"""
+
+    def _scan(text):
+        """返回 (未闭合开括号栈, 是否停在字符串内)。"""
+        in_str = False
+        esc = False
+        stack = []
+        for ch in text:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack.append(ch)
+            elif ch in "}]":
+                if stack:
+                    stack.pop()
+        return stack, in_str
+
+    # 丢弃最后一个不完整的对象（只在顶层对象闭合处截断，尽量保留已完整内容）
+    stack, in_str = _scan(t)
+    last_safe = 0
+    if stack:
+        # 找最后一个顶层对象闭合点
+        depth = 0
+        in_s = False
+        esc = False
+        for i, ch in enumerate(t):
+            if in_s:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_s = False
+                continue
+            if ch == '"':
+                in_s = True
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 1:  # 外层数组内一个对象闭合
+                    last_safe = i + 1
+    t2 = t[:last_safe] if last_safe else t
+    if in_str and not last_safe:
+        t2 += '"'  # 停在字符串中先补引号
+    stack2, in_str2 = _scan(t2)
+    if in_str2:
+        t2 += '"'
+    t2 = re.sub(r",\s*$", "", t2)
+    close = "".join("}" if c == "{" else "]" for c in reversed(stack2))
+    return t2 + close
+
+
 def _parse_json_array(text: str | None):
+    """解析 LLM 输出的 JSON 数组；对围栏/尾逗号/布尔空值/截断做修复。"""
     if not text:
         return None
-    m = re.search(r"\[.*\]", text, re.S)
-    if not m:
+    t = text.strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", t, re.S)
+    if m:
+        t = m.group(1).strip()
+    s = t.find("[")
+    if s == -1:
         return None
-    try:
-        return json.loads(m.group(0))
-    except Exception:
-        return None
+    body = t[s:]
+    e = body.rfind("]")
+    candidates = []
+    if e > 0:
+        candidates.append(body[:e + 1])       # 快路径：完整闭合
+        candidates.append(_balance_json(body[:e + 1]))
+    candidates.append(_balance_json(body))    # 截断修复（保留最多内容）
+    fixes = [
+        (r",\s*([\]}])", r"\1"),
+        (r"\bTrue\b", "true"),
+        (r"\bFalse\b", "false"),
+        (r"\bNone\b", "null"),
+    ]
+    for cand in candidates:
+        if not cand:
+            continue
+        for c in (cand, re.sub(r",\s*([\]}])", r"\1", cand)):
+            x = c
+            for pat, rep in fixes:
+                try:
+                    x = re.sub(pat, rep, x)
+                except Exception:
+                    pass
+            try:
+                r = json.loads(x)
+                if isinstance(r, list):
+                    return r
+            except Exception:
+                continue
+    return None
 
 
 def _finish_sentence(s: str) -> str:
@@ -204,14 +302,19 @@ def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,
 
     base = cfg["api_base"].rstrip("/")
 
-    # 阶段 1：大纲
+    # 阶段 1：大纲（失败自动重试一次）
     rep(0.40, "AI 正在策划大纲…")
-    text, err = _chat(base, cfg["api_key"], cfg["model"],
-                      OUTLINE_PROMPT.format(topic=topic, count=slides_count,
-                                            audience=audience,
-                                            knowledge=knowledge or "（无）"),
-                      temperature=0.5)
-    if err:
+    text = None
+    err = None
+    for attempt in range(2):
+        text, err = _chat(base, cfg["api_key"], cfg["model"],
+                          OUTLINE_PROMPT.format(topic=topic, count=slides_count,
+                                                audience=audience,
+                                                knowledge=knowledge or "（无）"),
+                          temperature=0.5 if attempt == 0 else 0.3)
+        if text and not err:
+            break
+    if err or not text:
         return None, f"AI 大纲生成失败：{err}"
     outline = _parse_json_array(text)
     if not isinstance(outline, list) or len(outline) < 2:
@@ -220,18 +323,25 @@ def _llm_generate(topic: str, slides_count: int, audience: str, knowledge: str,
     outline = outline[:slides_count]
     outline_text = json.dumps(outline, ensure_ascii=False, indent=1)
 
-    # 阶段 2：逐页扩写
+    # 阶段 2：逐页扩写（失败自动重试一次，重试时降低温度）
     rep(0.60, "AI 正在逐页撰写内容…")
-    text, err = _chat(base, cfg["api_key"], cfg["model"],
-                      CONTENT_PROMPT.format(topic=topic, audience=audience,
-                                            outline=outline_text,
-                                            knowledge=knowledge or "（无）"),
-                      temperature=0.6, timeout=240)
-    if err:
-        return None, f"AI 内容生成失败：{err}"
-    arr = _parse_json_array(text)
+    arr = None
+    last_err = None
+    for attempt in range(2):
+        text, err = _chat(base, cfg["api_key"], cfg["model"],
+                          CONTENT_PROMPT.format(topic=topic, audience=audience,
+                                                outline=outline_text,
+                                                knowledge=knowledge or "（无）"),
+                          temperature=0.6 if attempt == 0 else 0.4, timeout=240)
+        if err or not text:
+            last_err = err
+            continue
+        arr = _parse_json_array(text)
+        if isinstance(arr, list) and len(arr) >= 2:
+            break
+        arr = None
     if not isinstance(arr, list) or len(arr) < 2:
-        return None, "AI 返回的内容格式异常"
+        return None, "AI 返回的内容格式异常" + (f"（{last_err}）" if last_err else "")
 
     slides = []
     for it in arr:

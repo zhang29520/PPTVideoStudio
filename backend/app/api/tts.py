@@ -1,4 +1,6 @@
 """TTS 配音 API：后台任务逐页合成 + 试听 + 音频文件服务。"""
+import hashlib
+import os
 import tempfile
 from pathlib import Path
 
@@ -59,10 +61,30 @@ def tts_preview(voice: str = "", speed: str = "1.0"):
     rate = speed_to_rate(speed)
     v = (voice or "").strip() or load_settings()["tts_voice"]
     text = "您好，这是当前语速的试听效果，生成视频时每页配音都会使用这个语速。"
-    fd, path = tempfile.mkstemp(suffix=".mp3")
-    Path(path).unlink(missing_ok=True)
+
+    # Windows 兼容修复（2026-11-24）：
+    # 原实现 tempfile.mkstemp() 返回打开的 fd 却未关闭，紧接着 unlink 该路径。
+    # Windows 不允许删除仍被占用的文件 → PermissionError [WinError 32] → 500 HTML，
+    # 前端拿不到 JSON detail，只显示「试听播放失败」。改为确定性缓存路径 + 显式关闭 fd。
+    # 同时按 voice+rate 缓存试听音频：重复试听不再每次联网合成，失败时也更快返回。
+    cache_dir = Path(tempfile.gettempdir()) / "pvs-tts-preview"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        key = hashlib.md5(f"{v}|{rate}".encode("utf-8")).hexdigest()[:16]
+        path = cache_dir / f"preview_{key}.mp3"
+    except Exception:
+        fd, path_str = tempfile.mkstemp(suffix=".mp3")
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        path = Path(path_str)
+
+    if path.exists() and path.stat().st_size > 1000:
+        return FileResponse(path, media_type="audio/mpeg", filename="preview.mp3")
+
     errs: list = []
-    if not _synth_one(text, v, rate, "+0%", Path(path), err_out=errs):
+    if not _synth_one(text, v, rate, "+0%", path, err_out=errs):
         detail = "试听合成失败，请检查网络（Edge-TTS 需要能访问微软服务器）"
         if errs:
             detail += f"｜{errs[-1][:200]}"
